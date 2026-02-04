@@ -14,5 +14,55 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  memberships      GroupMember[]
+  usedInviteCodes  InviteCode[]
+
   @@map("users")
+}
+
+enum MemberRole {
+  CHALLENGER // 挑战者
+  SUPERVISOR // 监督者
+}
+
+model Group {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(40)
+  description String?  @db.VarChar(100)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  members     GroupMember[]
+  inviteCodes InviteCode[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id        Int        @id @default(autoincrement())
+  groupId   Int        @map("group_id")
+  userId    Int        @map("user_id")
+  role      MemberRole
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  group Group @relation(fields: [groupId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([groupId, userId])
+  @@map("group_members")
+}
+
+model InviteCode {
+  id        Int       @id @default(autoincrement())
+  groupId   Int       @map("group_id")
+  code      String    @unique @db.VarChar(20)
+  usedAt    DateTime? @map("used_at")
+  usedById  Int?      @map("used_by_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  group  Group @relation(fields: [groupId], references: [id])
+  usedBy User? @relation(fields: [usedById], references: [id])
+
+  @@map("invite_codes")
 }
