@@ -55,6 +55,7 @@
 
 - 仅使用 Tailwind CSS，不写自定义 CSS
 - 颜色使用 Tailwind 预设或在 `tailwind.config.ts` 中统一定义
+- 优先使用阴影效果而非边框；如需边框，应使用浅色或低对比度样式，避免笨重感
 
 ---
 
