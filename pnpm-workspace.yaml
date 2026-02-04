@@ -1,0 +1,6 @@
+ignoredBuiltDependencies:
+  - '@parcel/watcher'
+  - '@prisma/engines'
+  - bcrypt
+  - esbuild
+  - prisma

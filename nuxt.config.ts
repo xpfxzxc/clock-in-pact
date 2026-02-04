@@ -9,6 +9,8 @@ export default defineNuxtConfig({
     'nuxt-auth-utils',
   ],
 
+  css: ['~/assets/css/main.css'],
+
   future: {
     compatibilityVersion: 4,
   },
