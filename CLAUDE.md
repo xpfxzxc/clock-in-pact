@@ -1,6 +1,25 @@
 # CLAUDE.md
 
-参考 [AGENTS.md](AGENTS.md) 了解项目概述、架构和开发规范。
+## 必读规范
+
+开始任务前，**必须**阅读以下文档：
+
+- [AGENTS.md](AGENTS.md) - 项目概述
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - 技术栈、目录结构
+- [docs/GUIDELINES.md](docs/GUIDELINES.md) - 开发规范
+
+### 关键检查点
+
+在以下阶段，**必须**查阅对应规范章节（位于 `docs/GUIDELINES.md`）：
+
+| 阶段 | 查阅章节 | 关键动作 |
+|------|----------|----------|
+| 前端页面开发 | UI/UX 规范 | 调用 `ui-ux-pro-max` skill |
+| 后端业务逻辑 | 测试 | 编写单元测试 |
+| Git 提交 | Git 提交规范 | 遵循 Conventional Commits |
+| 版本发布 | 版本标签规范 | 检查 README、测试、CHANGELOG |
+
+---
 
 ## 分工原则
 
