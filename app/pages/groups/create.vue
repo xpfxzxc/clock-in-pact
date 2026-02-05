@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CreateGroupRequest, GroupDetailResponse, MemberRole } from '~/types/group'
+import { COMMON_TIMEZONES, getOtherTimezones } from '~/utils/timezones'
 
 definePageMeta({
   middleware: 'auth',
@@ -9,9 +10,12 @@ useHead({
   title: '创建小组 - 打卡契约',
 })
 
+const otherTimezones = computed(() => getOtherTimezones())
+
 const form = reactive<CreateGroupRequest>({
   name: '',
   description: '',
+  timezone: 'Asia/Shanghai',
   role: 'CHALLENGER' as MemberRole,
 })
 
@@ -89,6 +93,7 @@ async function handleSubmit() {
       body: {
         name: form.name.trim(),
         description: description || undefined,
+        timezone: form.timezone,
         role: form.role,
       },
     })
@@ -213,6 +218,31 @@ async function handleSubmit() {
               <span v-else></span>
               <span class="text-xs text-gray-400">{{ (form.description || '').length }}/100</span>
             </div>
+          </div>
+
+          <div>
+            <label for="timezone" class="block text-sm font-medium text-foreground mb-2">
+              小组时区
+            </label>
+            <select
+              id="timezone"
+              v-model="form.timezone"
+              class="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-colors bg-white"
+            >
+              <optgroup label="常用时区">
+                <option v-for="tz in COMMON_TIMEZONES" :key="tz.value" :value="tz.value">
+                  {{ tz.label }}
+                </option>
+              </optgroup>
+              <optgroup label="全部时区">
+                <option v-for="timezone in otherTimezones" :key="timezone" :value="timezone">
+                  {{ timezone }}
+                </option>
+              </optgroup>
+            </select>
+            <p class="mt-2 text-xs text-gray-500">
+              小组内所有日期/时间的判定与展示均以此时区为准，创建后不可修改
+            </p>
           </div>
 
           <div class="bg-gray-50 rounded-lg p-4">

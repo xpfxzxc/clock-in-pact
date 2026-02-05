@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { GroupDetailResponse } from '~/types/group'
+import { getTimezoneLabel } from '~/utils/timezones'
 
 definePageMeta({
   middleware: 'auth',
@@ -80,6 +81,14 @@ async function copyInviteCode(code: string) {
                 <h2 class="text-2xl font-bold text-foreground">{{ group.name }}</h2>
                 <p v-if="group.description" class="mt-2 text-gray-600">
                   {{ group.description }}
+                </p>
+                <p class="mt-2 text-sm text-gray-500">
+                  <span class="inline-flex items-center gap-1">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    时区：{{ getTimezoneLabel(group.timezone) }}
+                  </span>
                 </p>
               </div>
               <span

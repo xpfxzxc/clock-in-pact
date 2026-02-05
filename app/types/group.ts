@@ -3,6 +3,7 @@ export type MemberRole = "CHALLENGER" | "SUPERVISOR";
 export interface CreateGroupRequest {
   name: string;
   description?: string;
+  timezone?: string;
   role: MemberRole;
 }
 
@@ -10,6 +11,7 @@ export interface GroupResponse {
   id: number;
   name: string;
   description: string | null;
+  timezone: string;
   createdAt: string;
   memberCount: number;
   myRole?: MemberRole;

@@ -17,6 +17,7 @@ const GROUP_MAX_MEMBERS = 6;
 const INVITE_CODE_LENGTH = 8;
 const INITIAL_INVITE_CODE_COUNT = 5;
 const INVITE_CODE_WRITE_MAX_ATTEMPTS = 5;
+const DEFAULT_TIMEZONE = "Asia/Shanghai";
 
 export interface GroupPrismaClient {
   $transaction<T>(fn: (tx: GroupPrismaTransactionClient) => Promise<T>): Promise<T>;
@@ -25,6 +26,7 @@ export interface GroupPrismaClient {
       data: {
         name: string;
         description?: string | null;
+        timezone: string;
         members: { create: { userId: number; role: MemberRole } };
         inviteCodes: { create: Array<{ code: string }> };
       };
@@ -37,6 +39,7 @@ export interface GroupPrismaClient {
       id: number;
       name: string;
       description: string | null;
+      timezone: string;
       createdAt: Date;
       members: Array<{
         id: number;
@@ -60,6 +63,7 @@ export interface GroupPrismaClient {
         id: number;
         name: string;
         description: string | null;
+        timezone: string;
         createdAt: Date;
         _count: { members: number };
         members: Array<{ role: MemberRole }>;
@@ -79,6 +83,7 @@ export interface GroupPrismaClient {
       id: number;
       name: string;
       description: string | null;
+      timezone: string;
       createdAt: Date;
       members: Array<{
         id: number;
@@ -109,6 +114,7 @@ export interface GroupPrismaClient {
             id: true;
             name: true;
             description: true;
+            timezone: true;
             createdAt: true;
             _count: { select: { members: true } };
           };
@@ -124,6 +130,7 @@ export interface GroupPrismaClient {
         id: number;
         name: string;
         description: string | null;
+        timezone: string;
         createdAt: Date;
         _count: { members: number };
       };
@@ -173,6 +180,21 @@ function assertRole(role: unknown): asserts role is MemberRole {
   }
 }
 
+function isValidTimezone(timezone: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function assertTimezone(timezone: unknown): asserts timezone is string {
+  if (typeof timezone !== "string" || !isValidTimezone(timezone)) {
+    throw new AppError(400, "请选择有效的时区");
+  }
+}
+
 function assertCreateGroupInput(body: CreateGroupRequest): void {
   const name = body.name?.trim() ?? "";
   const nameUnits = calculateLengthUnits(name);
@@ -186,6 +208,10 @@ function assertCreateGroupInput(body: CreateGroupRequest): void {
   }
 
   assertRole(body.role);
+
+  if (body.timezone !== undefined) {
+    assertTimezone(body.timezone);
+  }
 }
 
 function isPrismaUniqueConstraintError(error: unknown): boolean {
@@ -208,6 +234,7 @@ export async function createGroup(
         data: {
           name: body.name.trim(),
           description: body.description?.trim() || null,
+          timezone: body.timezone ?? DEFAULT_TIMEZONE,
           members: {
             create: {
               userId,
@@ -261,6 +288,7 @@ export async function createGroup(
     id: group.id,
     name: group.name,
     description: group.description,
+    timezone: group.timezone,
     createdAt: group.createdAt.toISOString(),
     memberCount: group._count.members,
     myRole: myMembership.role,
@@ -293,6 +321,7 @@ export async function getMyGroups(
     id: g.id,
     name: g.name,
     description: g.description,
+    timezone: g.timezone,
     createdAt: g.createdAt.toISOString(),
     memberCount: g._count.members,
     myRole: g.members[0]?.role,
@@ -343,6 +372,7 @@ export async function getGroupDetail(
     id: group.id,
     name: group.name,
     description: group.description,
+    timezone: group.timezone,
     createdAt: group.createdAt.toISOString(),
     memberCount: group._count.members,
     myRole: myMembership.role,
@@ -371,6 +401,7 @@ export async function joinGroup(
           id: true,
           name: true,
           description: true,
+          timezone: true,
           createdAt: true,
           _count: { select: { members: true } },
         },
@@ -435,6 +466,7 @@ export async function joinGroup(
       id: invite.group.id,
       name: invite.group.name,
       description: invite.group.description,
+      timezone: invite.group.timezone,
       createdAt: invite.group.createdAt.toISOString(),
       memberCount: invite.group._count.members + 1,
       myRole: body.role,

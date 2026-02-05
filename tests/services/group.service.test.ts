@@ -84,6 +84,7 @@ describe("US-03 创建小组", () => {
       id: 1,
       name: "测试小组",
       description: "这是一个测试小组",
+      timezone: "Asia/Shanghai",
       createdAt: now,
       members: [
         {
@@ -170,6 +171,7 @@ describe("US-03 创建小组", () => {
       id: 1,
       name,
       description: null,
+      timezone: "Asia/Shanghai",
       createdAt: now,
       members: [
         {
@@ -220,6 +222,7 @@ describe("US-03 创建小组", () => {
       id: 1,
       name: "测试小组",
       description: null,
+      timezone: "Asia/Shanghai",
       createdAt: now,
       members: [
         {
@@ -259,6 +262,7 @@ describe("US-03 创建小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         members: [
           {
@@ -294,6 +298,104 @@ describe("US-03 创建小组", () => {
       message: "请选择有效的角色",
     });
   });
+
+  it("场景3: 时区设定 - 使用指定时区创建小组", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.groupCreate.mockResolvedValueOnce({
+      id: 1,
+      name: "测试小组",
+      description: null,
+      timezone: "America/New_York",
+      createdAt: now,
+      members: [
+        {
+          id: 1,
+          userId: 1,
+          role: "CHALLENGER",
+          createdAt: now,
+          user: { nickname: "用户1" },
+        },
+      ],
+      inviteCodes: [
+        { code: "ABC12345" },
+        { code: "DEF67890" },
+        { code: "GHI11111" },
+        { code: "JKL22222" },
+        { code: "MNO33333" },
+      ],
+      _count: { members: 1 },
+    });
+
+    const result = await createGroup(
+      { name: "测试小组", role: "CHALLENGER", timezone: "America/New_York" },
+      1,
+      { prisma }
+    );
+
+    expect(mocks.groupCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          timezone: "America/New_York",
+        }),
+      })
+    );
+    expect(result.timezone).toBe("America/New_York");
+  });
+
+  it("不指定时区时使用默认时区 Asia/Shanghai", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.groupCreate.mockResolvedValueOnce({
+      id: 1,
+      name: "测试小组",
+      description: null,
+      timezone: "Asia/Shanghai",
+      createdAt: now,
+      members: [
+        {
+          id: 1,
+          userId: 1,
+          role: "CHALLENGER",
+          createdAt: now,
+          user: { nickname: "用户1" },
+        },
+      ],
+      inviteCodes: [
+        { code: "ABC12345" },
+        { code: "DEF67890" },
+        { code: "GHI11111" },
+        { code: "JKL22222" },
+        { code: "MNO33333" },
+      ],
+      _count: { members: 1 },
+    });
+
+    const result = await createGroup({ name: "测试小组", role: "CHALLENGER" }, 1, { prisma });
+
+    expect(mocks.groupCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          timezone: "Asia/Shanghai",
+        }),
+      })
+    );
+    expect(result.timezone).toBe("Asia/Shanghai");
+  });
+
+  it("无效时区 → 提示错误", async () => {
+    const { prisma } = createPrismaMock();
+
+    await expectAppError(
+      createGroup({ name: "测试小组", role: "CHALLENGER", timezone: "Invalid/Timezone" }, 1, { prisma }),
+      {
+        statusCode: 400,
+        message: "请选择有效的时区",
+      }
+    );
+  });
 });
 
 describe("US-03 获取我的小组列表", () => {
@@ -306,6 +408,7 @@ describe("US-03 获取我的小组列表", () => {
         id: 1,
         name: "小组1",
         description: "描述1",
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 3 },
         members: [{ role: "CHALLENGER" }],
@@ -314,6 +417,7 @@ describe("US-03 获取我的小组列表", () => {
         id: 2,
         name: "小组2",
         description: null,
+        timezone: "America/New_York",
         createdAt: now,
         _count: { members: 2 },
         members: [{ role: "SUPERVISOR" }],
@@ -325,8 +429,10 @@ describe("US-03 获取我的小组列表", () => {
     expect(result).toHaveLength(2);
     expect(result[0].name).toBe("小组1");
     expect(result[0].myRole).toBe("CHALLENGER");
+    expect(result[0].timezone).toBe("Asia/Shanghai");
     expect(result[1].name).toBe("小组2");
     expect(result[1].myRole).toBe("SUPERVISOR");
+    expect(result[1].timezone).toBe("America/New_York");
   });
 });
 
@@ -339,6 +445,7 @@ describe("US-03 获取小组详情", () => {
       id: 1,
       name: "测试小组",
       description: "描述",
+      timezone: "Asia/Tokyo",
       createdAt: now,
       members: [
         {
@@ -368,6 +475,7 @@ describe("US-03 获取小组详情", () => {
 
     expect(result.id).toBe(1);
     expect(result.name).toBe("测试小组");
+    expect(result.timezone).toBe("Asia/Tokyo");
     expect(result.members).toHaveLength(2);
     expect(result.inviteCodes).toHaveLength(3);
     expect(result.inviteCodes).toContain("ABC12345");
@@ -404,6 +512,7 @@ describe("US-03 获取小组详情", () => {
       id: 1,
       name: "测试小组",
       description: null,
+      timezone: "Asia/Shanghai",
       createdAt: now,
       members: [
         {
@@ -442,6 +551,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: "描述",
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -464,6 +574,7 @@ describe("US-04 加入小组", () => {
     expect(result.group.id).toBe(1);
     expect(result.role).toBe("CHALLENGER");
     expect(result.group.memberCount).toBe(2);
+    expect(result.group.timezone).toBe("Asia/Shanghai");
     expect(mocks.transaction).toHaveBeenCalledTimes(1);
     expect(mocks.inviteCodeUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -478,7 +589,7 @@ describe("US-04 加入小组", () => {
     );
   });
 
-  it("邀请码在事务中被抢用 → 提示“邀请码无效”", async () => {
+  it('邀请码在事务中被抢用 → 提示"邀请码无效"', async () => {
     const { prisma, mocks } = createPrismaMock();
     const now = new Date();
 
@@ -492,6 +603,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -520,6 +632,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -585,6 +698,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -610,6 +724,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -622,7 +737,7 @@ describe("US-04 加入小组", () => {
     });
   });
 
-  it("并发加入时写入成员表冲突 → 仍提示“您已是该小组成员”", async () => {
+  it('并发加入时写入成员表冲突 → 仍提示"您已是该小组成员"', async () => {
     const { prisma, mocks } = createPrismaMock();
     const now = new Date();
 
@@ -636,6 +751,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
@@ -664,6 +780,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 6 },
       },
@@ -704,6 +821,7 @@ describe("US-04 加入小组", () => {
         id: 1,
         name: "测试小组",
         description: null,
+        timezone: "Asia/Shanghai",
         createdAt: now,
         _count: { members: 1 },
       },
