@@ -20,6 +20,15 @@
 - 核心业务逻辑必须有测试覆盖
 - 提交前运行 `pnpm test` 确保测试通过
 
+### 定时任务
+
+- 通过 Nitro 插件（`server/plugins/`）启动调度器，不在 API 路由或 Service 中直接启动
+- 使用全局标记防止 HMR 重复注册调度器
+- 生产环境使用 node-cron，开发环境降级为 `setInterval`
+- tick 函数需加 `isRunning` 守卫，防止上一次执行未完成时重复触发
+- 调度器通过依赖注入接收 `prisma`、`logger`、`now` 等依赖，保证可测试性
+- 日志统一使用 `[scheduler]` 前缀，便于过滤排查
+
 ---
 
 ## UI/UX 规范
