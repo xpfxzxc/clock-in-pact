@@ -11,6 +11,7 @@
 | 数据库 | PostgreSQL | 16 | 本地 Docker，线上直连 |
 | 认证 | nuxt-auth-utils | ^0.5 | Session 认证 |
 | 文件存储 | 本地 / 腾讯云 COS | - | 开发用本地，生产用 COS |
+| 定时任务 | node-cron | ^4.2 | 生产环境 cron 调度，开发环境 setInterval 降级 |
 | 测试 | Vitest | ^2.0 | 仅测试 Service 层 |
 | 包管理 | pnpm | ^9.0 | 快速、节省磁盘 |
 
@@ -26,6 +27,7 @@ clock-in-pact/
 ├── server/                  # 后端
 │   ├── api/                 # API 路由
 │   ├── services/            # 业务逻辑层
+│   ├── plugins/             # Nitro 插件（定时任务启动等）
 │   ├── middleware/          # 中间件
 │   └── utils/               # 工具函数（prisma client、storage 等）
 ├── components/              # Vue 组件
