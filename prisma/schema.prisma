@@ -14,8 +14,10 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships      GroupMember[]
-  usedInviteCodes  InviteCode[]
+  memberships          GroupMember[]
+  usedInviteCodes      InviteCode[]
+  createdGoals         Goal[]
+  categoryCompletions  CategoryCompletion[]
 
   @@map("users")
 }
@@ -33,8 +35,10 @@ model Group {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  members     GroupMember[]
-  inviteCodes InviteCode[]
+  members              GroupMember[]
+  inviteCodes          InviteCode[]
+  goals                Goal[]
+  categoryCompletions  CategoryCompletion[]
 
   @@map("groups")
 }
@@ -49,6 +53,9 @@ model GroupMember {
 
   group Group @relation(fields: [groupId], references: [id])
   user  User  @relation(fields: [userId], references: [id])
+
+  goalConfirmations GoalConfirmation[]
+  goalParticipants  GoalParticipant[]
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -66,4 +73,88 @@ model InviteCode {
   usedBy User? @relation(fields: [usedById], references: [id])
 
   @@map("invite_codes")
+}
+
+enum GoalStatus {
+  PENDING   // 待确认
+  UPCOMING  // 待开始（全员同意但开始日期未到）
+  ACTIVE    // 进行中
+  SETTLING  // 待结算
+  ARCHIVED  // 已归档
+  VOIDED    // 已作废（开始日期到达但未全员同意）
+  CANCELLED // 已取消（全员同意取消）
+}
+
+enum ConfirmationStatus {
+  PENDING  // 待确认
+  APPROVED // 已同意
+  REJECTED // 已拒绝
+}
+
+model Goal {
+  id                  Int        @id @default(autoincrement())
+  groupId             Int        @map("group_id")
+  name                String     @db.VarChar(50)
+  category            String     @db.VarChar(20)
+  targetValue         Decimal    @map("target_value") @db.Decimal(10, 2)
+  unit                String     @db.VarChar(10)
+  startDate           DateTime   @map("start_date") @db.Date
+  endDate             DateTime   @map("end_date") @db.Date
+  rewardPunishment    String     @map("reward_punishment") @db.VarChar(200)
+  evidenceRequirement String     @map("evidence_requirement") @db.VarChar(200)
+  status              GoalStatus @default(PENDING)
+  createdById         Int        @map("created_by_id")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+
+  group         Group              @relation(fields: [groupId], references: [id])
+  createdBy     User               @relation(fields: [createdById], references: [id])
+  confirmations GoalConfirmation[]
+  participants  GoalParticipant[]
+
+  @@map("goals")
+}
+
+model GoalConfirmation {
+  id        Int                @id @default(autoincrement())
+  goalId    Int                @map("goal_id")
+  memberId  Int                @map("member_id")
+  status    ConfirmationStatus @default(PENDING)
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+
+  goal   Goal        @relation(fields: [goalId], references: [id])
+  member GroupMember @relation(fields: [memberId], references: [id])
+
+  @@unique([goalId, memberId])
+  @@map("goal_confirmations")
+}
+
+model GoalParticipant {
+  id        Int      @id @default(autoincrement())
+  goalId    Int      @map("goal_id")
+  memberId  Int      @map("member_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  goal   Goal        @relation(fields: [goalId], references: [id])
+  member GroupMember @relation(fields: [memberId], references: [id])
+
+  @@unique([goalId, memberId])
+  @@map("goal_participants")
+}
+
+model CategoryCompletion {
+  id              Int      @id @default(autoincrement())
+  groupId         Int      @map("group_id")
+  userId          Int      @map("user_id")
+  category        String   @db.VarChar(20)
+  completionCount Int      @default(0) @map("completion_count")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  group Group @relation(fields: [groupId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([groupId, userId, category])
+  @@map("category_completions")
 }

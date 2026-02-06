@@ -140,11 +140,26 @@ export interface GroupPrismaClient {
       data: { usedAt: Date; usedById: number };
     }): Promise<{ count: number }>;
   };
+  goal: {
+    findFirst(args: {
+      where: { groupId: number; status: { in: ("UPCOMING" | "ACTIVE")[] } | "PENDING" };
+      select: { id: true };
+    }): Promise<{ id: number } | null>;
+  };
+  goalParticipant: {
+    create(args: { data: { goalId: number; memberId: number } }): Promise<{ id: number }>;
+  };
+  goalConfirmation: {
+    create(args: { data: { goalId: number; memberId: number } }): Promise<{ id: number }>;
+  };
 }
 
 export interface GroupPrismaTransactionClient {
   groupMember: Pick<GroupPrismaClient["groupMember"], "create">;
   inviteCode: Pick<GroupPrismaClient["inviteCode"], "updateMany">;
+  goal: Pick<GroupPrismaClient["goal"], "findFirst">;
+  goalParticipant: Pick<GroupPrismaClient["goalParticipant"], "create">;
+  goalConfirmation: Pick<GroupPrismaClient["goalConfirmation"], "create">;
 }
 
 type GroupCreateResult = Awaited<ReturnType<GroupPrismaClient["group"]["create"]>>;
@@ -446,13 +461,38 @@ export async function joinGroup(
     }
 
     try {
-      await tx.groupMember.create({
+      const membership = await tx.groupMember.create({
         data: {
           groupId: invite.groupId,
           userId,
           role: body.role,
         },
       });
+
+      if (body.role === "CHALLENGER") {
+        const activeGoal = await tx.goal.findFirst({
+          where: { groupId: invite.groupId, status: { in: ["UPCOMING", "ACTIVE"] } },
+          select: { id: true },
+        });
+
+        if (activeGoal) {
+          await tx.goalParticipant.create({
+            data: { goalId: activeGoal.id, memberId: membership.id },
+          });
+        }
+      }
+
+      // 场景4: 如果有待确认的目标，为新成员创建确认请求
+      const pendingGoal = await tx.goal.findFirst({
+        where: { groupId: invite.groupId, status: "PENDING" },
+        select: { id: true },
+      });
+
+      if (pendingGoal) {
+        await tx.goalConfirmation.create({
+          data: { goalId: pendingGoal.id, memberId: membership.id },
+        });
+      }
     } catch (error) {
       if (isPrismaUniqueConstraintError(error)) {
         throw new AppError(409, "您已是该小组成员");

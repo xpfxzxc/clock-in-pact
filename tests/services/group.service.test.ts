@@ -35,11 +35,17 @@ function createPrismaMock() {
   const groupMemberCreateMock = vi.fn();
   const inviteCodeFindUniqueMock = vi.fn();
   const inviteCodeUpdateManyMock = vi.fn();
+  const goalFindFirstMock = vi.fn().mockResolvedValue(null);
+  const goalParticipantCreateMock = vi.fn();
+  const goalConfirmationCreateMock = vi.fn();
 
   const transactionMock = vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
     return fn({
       groupMember: { create: groupMemberCreateMock },
       inviteCode: { updateMany: inviteCodeUpdateManyMock },
+      goal: { findFirst: goalFindFirstMock },
+      goalParticipant: { create: goalParticipantCreateMock },
+      goalConfirmation: { create: goalConfirmationCreateMock },
     });
   });
 
@@ -58,6 +64,15 @@ function createPrismaMock() {
       findUnique: inviteCodeFindUniqueMock as unknown as GroupPrismaClient["inviteCode"]["findUnique"],
       updateMany: inviteCodeUpdateManyMock as unknown as GroupPrismaClient["inviteCode"]["updateMany"],
     },
+    goal: {
+      findFirst: goalFindFirstMock as unknown as GroupPrismaClient["goal"]["findFirst"],
+    },
+    goalParticipant: {
+      create: goalParticipantCreateMock as unknown as GroupPrismaClient["goalParticipant"]["create"],
+    },
+    goalConfirmation: {
+      create: goalConfirmationCreateMock as unknown as GroupPrismaClient["goalConfirmation"]["create"],
+    },
   };
 
   return {
@@ -71,6 +86,9 @@ function createPrismaMock() {
       groupMemberCreate: groupMemberCreateMock,
       inviteCodeFindUnique: inviteCodeFindUniqueMock,
       inviteCodeUpdateMany: inviteCodeUpdateManyMock,
+      goalFindFirst: goalFindFirstMock,
+      goalParticipantCreate: goalParticipantCreateMock,
+      goalConfirmationCreate: goalConfirmationCreateMock,
     },
   };
 }
@@ -844,7 +862,170 @@ describe("US-04 加入小组", () => {
     );
   });
 
-  it.skip("场景4: 加入时有进行中目标（暂不实现：自动参与当前目标）", async () => {
-    // 根据本轮需求：跳过 US-04 业务规则 #6
+  it("场景5: 加入时有待开始或进行中目标（挑战者）→ 自动参与当前目标", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.inviteCodeFindUnique.mockResolvedValueOnce({
+      id: 1,
+      groupId: 1,
+      code: "ABC12345",
+      usedAt: null,
+      usedById: null,
+      group: {
+        id: 1,
+        name: "测试小组",
+        description: null,
+        timezone: "Asia/Shanghai",
+        createdAt: now,
+        _count: { members: 1 },
+      },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+    mocks.inviteCodeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.groupMemberCreate.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      userId: 2,
+      role: "CHALLENGER",
+    });
+    mocks.goalFindFirst.mockResolvedValueOnce({ id: 99 }); // UPCOMING/ACTIVE 目标
+    mocks.goalParticipantCreate.mockResolvedValueOnce({ id: 1 });
+    mocks.goalFindFirst.mockResolvedValueOnce(null); // 无 PENDING 目标
+
+    await joinGroup({ inviteCode: "ABC12345", role: "CHALLENGER" }, 2, { prisma });
+
+    expect(mocks.goalFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { groupId: 1, status: { in: ["UPCOMING", "ACTIVE"] } },
+        select: { id: true },
+      })
+    );
+    expect(mocks.goalParticipantCreate).toHaveBeenCalledWith({
+      data: { goalId: 99, memberId: 10 },
+    });
+  });
+
+  it("加入时有待开始或进行中目标（监督者）→ 不自动参与当前目标", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.inviteCodeFindUnique.mockResolvedValueOnce({
+      id: 1,
+      groupId: 1,
+      code: "ABC12345",
+      usedAt: null,
+      usedById: null,
+      group: {
+        id: 1,
+        name: "测试小组",
+        description: null,
+        timezone: "Asia/Shanghai",
+        createdAt: now,
+        _count: { members: 1 },
+      },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+    mocks.inviteCodeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.groupMemberCreate.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      userId: 2,
+      role: "SUPERVISOR",
+    });
+    mocks.goalFindFirst.mockResolvedValueOnce(null); // 无 PENDING 目标
+
+    await joinGroup({ inviteCode: "ABC12345", role: "SUPERVISOR" }, 2, { prisma });
+
+    expect(mocks.goalParticipantCreate).not.toHaveBeenCalled();
+  });
+
+  it("场景4: 加入时有待确认目标 → 自动获得确认请求", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.inviteCodeFindUnique.mockResolvedValueOnce({
+      id: 1,
+      groupId: 1,
+      code: "ABC12345",
+      usedAt: null,
+      usedById: null,
+      group: {
+        id: 1,
+        name: "测试小组",
+        description: null,
+        timezone: "Asia/Shanghai",
+        createdAt: now,
+        _count: { members: 1 },
+      },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+    mocks.inviteCodeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.groupMemberCreate.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      userId: 2,
+      role: "CHALLENGER",
+    });
+    mocks.goalFindFirst.mockResolvedValueOnce(null); // 无 UPCOMING/ACTIVE 目标
+    mocks.goalFindFirst.mockResolvedValueOnce({ id: 50 }); // 有 PENDING 目标
+    mocks.goalConfirmationCreate.mockResolvedValueOnce({ id: 1 });
+
+    await joinGroup({ inviteCode: "ABC12345", role: "CHALLENGER" }, 2, { prisma });
+
+    expect(mocks.goalFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { groupId: 1, status: "PENDING" },
+        select: { id: true },
+      })
+    );
+    expect(mocks.goalConfirmationCreate).toHaveBeenCalledWith({
+      data: { goalId: 50, memberId: 10 },
+    });
+  });
+
+  it("加入时有待确认目标（监督者）→ 自动获得确认请求", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.inviteCodeFindUnique.mockResolvedValueOnce({
+      id: 1,
+      groupId: 1,
+      code: "ABC12345",
+      usedAt: null,
+      usedById: null,
+      group: {
+        id: 1,
+        name: "测试小组",
+        description: null,
+        timezone: "Asia/Shanghai",
+        createdAt: now,
+        _count: { members: 1 },
+      },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+    mocks.inviteCodeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.groupMemberCreate.mockResolvedValueOnce({
+      id: 20,
+      groupId: 1,
+      userId: 2,
+      role: "SUPERVISOR",
+    });
+    mocks.goalFindFirst.mockResolvedValueOnce({ id: 51 });
+    mocks.goalConfirmationCreate.mockResolvedValueOnce({ id: 2 });
+
+    await joinGroup({ inviteCode: "ABC12345", role: "SUPERVISOR" }, 2, { prisma });
+
+    expect(mocks.goalFindFirst).toHaveBeenCalledTimes(1);
+    expect(mocks.goalFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { groupId: 1, status: "PENDING" },
+        select: { id: true },
+      })
+    );
+    expect(mocks.goalParticipantCreate).not.toHaveBeenCalled();
+    expect(mocks.goalConfirmationCreate).toHaveBeenCalledWith({
+      data: { goalId: 51, memberId: 20 },
+    });
   });
 });
