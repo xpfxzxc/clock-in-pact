@@ -405,6 +405,28 @@ describe("goal-change-request.service", () => {
       );
     });
 
+    it("MODIFY 请求中结束日期早于开始日期时失败", async () => {
+      ctx.mocks.goalFindUnique.mockResolvedValue(makeGoal({ status: "PENDING" }));
+      ctx.mocks.groupMemberFindUnique.mockResolvedValue({ id: 1 });
+      ctx.mocks.goalChangeRequestFindFirst.mockResolvedValue(null);
+
+      await expectAppError(
+        createGoalChangeRequest(
+          {
+            goalId: 1,
+            type: "MODIFY",
+            proposedChanges: {
+              startDate: "2026-04-20",
+              endDate: "2026-04-19",
+            },
+          },
+          1,
+          { prisma: ctx.prisma, now: () => NOW }
+        ),
+        { statusCode: 400, message: "结束日期不能早于开始日期" }
+      );
+    });
+
     it("非可修改状态不可发起请求", async () => {
       for (const status of ["VOIDED", "CANCELLED", "ARCHIVED", "SETTLING"]) {
         ctx.mocks.goalFindUnique.mockResolvedValue(makeGoal({ status }));

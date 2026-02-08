@@ -267,6 +267,26 @@ describe("goal.service createGoal", () => {
     });
   });
 
+  it("结束日期早于开始日期 → 提示错误", async () => {
+    const { prisma } = createPrismaMock();
+
+    await expectAppError(
+      createGoal(
+        {
+          ...baseCreateBody,
+          startDate: "2026-02-10",
+          endDate: "2026-02-09",
+        },
+        1,
+        { prisma }
+      ),
+      {
+        statusCode: 400,
+        message: "结束日期不能早于开始日期",
+      }
+    );
+  });
+
   it("小组有进行中/待确认目标 → 提示错误", async () => {
     const { prisma, mocks } = createPrismaMock();
 
