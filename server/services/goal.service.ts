@@ -7,7 +7,9 @@ import type {
   GoalDetailResponse,
   GoalResponse,
 } from "../types/goal";
+import type { GoalChangeRequestResponse, GoalChangeVoteInfo, GoalProposedChanges } from "../types/goal-change-request";
 import { AppError } from "../utils/app-error";
+import { getGoalChangeRequestEffectiveExpiresAt } from "../utils/goal-change-request-deadline";
 
 const GOAL_NAME_MAX_LENGTH = 50;
 const GOAL_CATEGORY_MAX_LENGTH = 20;
@@ -378,8 +380,10 @@ export async function createGoal(
 export async function getGoalDetail(
   goalId: number,
   userId: number,
-  deps: { prisma: GoalPrismaClient }
+  deps: { prisma: GoalPrismaClient; now?: () => Date }
 ): Promise<GoalDetailResponse> {
+  const now = deps.now?.() ?? new Date();
+
   if (Number.isNaN(goalId)) {
     throw new AppError(400, "无效的目标 ID");
   }
@@ -423,7 +427,84 @@ export async function getGoalDetail(
     throw new AppError(403, "您不是该小组成员");
   }
 
-  return mapGoalDetailResponse(goal, userId);
+  await deps.prisma.goalChangeRequest.updateMany({
+    where: {
+      goalId,
+      status: "PENDING",
+      expiresAt: { lte: now },
+    },
+    data: { status: "EXPIRED" },
+  });
+
+  const activeChangeRequest = await deps.prisma.goalChangeRequest.findFirst({
+    where: {
+      goalId,
+      status: "PENDING",
+      expiresAt: { gt: now },
+    },
+    include: {
+      initiator: { include: { user: { select: { nickname: true } } } },
+      goal: { select: { group: { select: { timezone: true } } } },
+      votes: {
+        include: {
+          member: { include: { user: { select: { nickname: true } } } },
+        },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+
+  const detail = mapGoalDetailResponse(goal, userId);
+
+  if (activeChangeRequest) {
+    const effectiveExpiresAt = getGoalChangeRequestEffectiveExpiresAt({
+      type: activeChangeRequest.type,
+      expiresAt: activeChangeRequest.expiresAt,
+      proposedChanges: activeChangeRequest.proposedChanges,
+      timezone: activeChangeRequest.goal?.group?.timezone,
+    });
+
+    if (effectiveExpiresAt.getTime() <= now.getTime()) {
+      await deps.prisma.goalChangeRequest.updateMany({
+        where: { id: activeChangeRequest.id, status: "PENDING" },
+        data: { status: "EXPIRED" },
+      });
+      detail.activeChangeRequest = null;
+      return detail;
+    }
+
+    const votes: GoalChangeVoteInfo[] = (activeChangeRequest.votes ?? []).map(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (v: any) => ({
+        memberId: v.memberId,
+        userId: v.member.userId,
+        nickname: v.member.user.nickname,
+        role: v.member.role,
+        status: v.status,
+        updatedAt: v.updatedAt.toISOString(),
+      })
+    );
+    const myVote = votes.find((v) => v.userId === userId);
+
+    detail.activeChangeRequest = {
+      id: activeChangeRequest.id,
+      goalId: activeChangeRequest.goalId,
+      type: activeChangeRequest.type,
+      status: activeChangeRequest.status,
+      initiatorId: activeChangeRequest.initiatorId,
+      initiatorNickname: activeChangeRequest.initiator.user.nickname,
+      proposedChanges: activeChangeRequest.proposedChanges as GoalProposedChanges | null,
+      expiresAt: activeChangeRequest.expiresAt.toISOString(),
+      effectiveExpiresAt: effectiveExpiresAt.toISOString(),
+      votes,
+      myVoteStatus: myVote?.status as ConfirmationStatus | undefined,
+      createdAt: activeChangeRequest.createdAt.toISOString(),
+    };
+  } else {
+    detail.activeChangeRequest = null;
+  }
+
+  return detail;
 }
 
 export async function confirmGoal(
@@ -468,6 +549,10 @@ export async function confirmGoal(
         where: { id: goalId, status: "PENDING" },
         data: { status: "VOIDED" },
       });
+      await tx.goalChangeRequest.updateMany({
+        where: { goalId, status: "PENDING" },
+        data: { status: "VOIDED" },
+      });
       throw new AppError(400, "目标已作废");
     }
 
@@ -498,6 +583,10 @@ export async function confirmGoal(
 
     if (updatedConfirmation.status === "REJECTED") {
       await tx.goal.update({ where: { id: goalId }, data: { status: "VOIDED" }, select: { status: true } });
+      await tx.goalChangeRequest.updateMany({
+        where: { goalId, status: "PENDING" },
+        data: { status: "VOIDED" },
+      });
       return { goalId, status: updatedConfirmation.status, goalStatus: "VOIDED" };
     }
 

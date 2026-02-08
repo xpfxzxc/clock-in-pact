@@ -38,6 +38,8 @@ function createPrismaMock() {
   const goalFindFirstMock = vi.fn().mockResolvedValue(null);
   const goalParticipantCreateMock = vi.fn();
   const goalConfirmationCreateMock = vi.fn();
+  const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
+  const goalChangeVoteCreateMock = vi.fn();
 
   const transactionMock = vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
     return fn({
@@ -46,6 +48,8 @@ function createPrismaMock() {
       goal: { findFirst: goalFindFirstMock },
       goalParticipant: { create: goalParticipantCreateMock },
       goalConfirmation: { create: goalConfirmationCreateMock },
+      goalChangeRequest: { findMany: goalChangeRequestFindManyMock },
+      goalChangeVote: { create: goalChangeVoteCreateMock },
     });
   });
 
@@ -89,6 +93,8 @@ function createPrismaMock() {
       goalFindFirst: goalFindFirstMock,
       goalParticipantCreate: goalParticipantCreateMock,
       goalConfirmationCreate: goalConfirmationCreateMock,
+      goalChangeRequestFindMany: goalChangeRequestFindManyMock,
+      goalChangeVoteCreate: goalChangeVoteCreateMock,
     },
   };
 }
@@ -1026,6 +1032,55 @@ describe("US-04 加入小组", () => {
     expect(mocks.goalParticipantCreate).not.toHaveBeenCalled();
     expect(mocks.goalConfirmationCreate).toHaveBeenCalledWith({
       data: { goalId: 51, memberId: 20 },
+    });
+  });
+
+  it("场景6: 加入时有待确认的修改/取消请求 → 自动获得投票记录", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    const now = new Date();
+
+    mocks.inviteCodeFindUnique.mockResolvedValueOnce({
+      id: 1,
+      groupId: 1,
+      code: "ABC12345",
+      usedAt: null,
+      usedById: null,
+      group: {
+        id: 1,
+        name: "测试小组",
+        description: null,
+        timezone: "Asia/Shanghai",
+        createdAt: now,
+        _count: { members: 1 },
+      },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+    mocks.inviteCodeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.groupMemberCreate.mockResolvedValueOnce({
+      id: 30,
+      groupId: 1,
+      userId: 2,
+      role: "SUPERVISOR",
+    });
+    mocks.goalFindFirst.mockResolvedValueOnce(null);
+    mocks.goalChangeRequestFindMany.mockResolvedValueOnce([{ id: 201 }, { id: 202 }]);
+    mocks.goalChangeVoteCreate.mockResolvedValue({ id: 1 });
+
+    await joinGroup({ inviteCode: "ABC12345", role: "SUPERVISOR" }, 2, { prisma });
+
+    expect(mocks.goalChangeRequestFindMany).toHaveBeenCalledWith({
+      where: {
+        goal: { groupId: 1 },
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+    expect(mocks.goalChangeVoteCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.goalChangeVoteCreate).toHaveBeenNthCalledWith(1, {
+      data: { requestId: 201, memberId: 30 },
+    });
+    expect(mocks.goalChangeVoteCreate).toHaveBeenNthCalledWith(2, {
+      data: { requestId: 202, memberId: 30 },
     });
   });
 });

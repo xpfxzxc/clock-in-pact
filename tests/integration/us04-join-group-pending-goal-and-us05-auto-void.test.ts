@@ -49,6 +49,8 @@ describeIntegration("integration US-04 场景4 & US-05 场景5", () => {
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.goalChangeVote.deleteMany();
+    await prisma.goalChangeRequest.deleteMany();
     await prisma.goalParticipant.deleteMany();
     await prisma.goalConfirmation.deleteMany();
     await prisma.goal.deleteMany();

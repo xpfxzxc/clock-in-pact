@@ -160,6 +160,15 @@ export interface GroupPrismaTransactionClient {
   goal: Pick<GroupPrismaClient["goal"], "findFirst">;
   goalParticipant: Pick<GroupPrismaClient["goalParticipant"], "create">;
   goalConfirmation: Pick<GroupPrismaClient["goalConfirmation"], "create">;
+  goalChangeRequest: {
+    findMany(args: {
+      where: { goal: { groupId: number }; status: string };
+      select: { id: true };
+    }): Promise<Array<{ id: number }>>;
+  };
+  goalChangeVote: {
+    create(args: { data: { requestId: number; memberId: number } }): Promise<{ id: number }>;
+  };
 }
 
 type GroupCreateResult = Awaited<ReturnType<GroupPrismaClient["group"]["create"]>>;
@@ -491,6 +500,21 @@ export async function joinGroup(
       if (pendingGoal) {
         await tx.goalConfirmation.create({
           data: { goalId: pendingGoal.id, memberId: membership.id },
+        });
+      }
+
+      // 场景5: 如果有 PENDING 的 GoalChangeRequest，为新成员创建投票记录
+      const pendingChangeRequests = await tx.goalChangeRequest.findMany({
+        where: {
+          goal: { groupId: invite.groupId },
+          status: "PENDING",
+        },
+        select: { id: true },
+      });
+
+      for (const req of pendingChangeRequests) {
+        await tx.goalChangeVote.create({
+          data: { requestId: req.id, memberId: membership.id },
         });
       }
     } catch (error) {

@@ -56,6 +56,8 @@ model GroupMember {
 
   goalConfirmations GoalConfirmation[]
   goalParticipants  GoalParticipant[]
+  goalChangeRequests GoalChangeRequest[]
+  goalChangeVotes    GoalChangeVote[]
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -85,6 +87,19 @@ enum GoalStatus {
   CANCELLED // 已取消（全员同意取消）
 }
 
+enum GoalChangeRequestType {
+  MODIFY // 修改
+  CANCEL // 取消
+}
+
+enum GoalChangeRequestStatus {
+  PENDING  // 待投票
+  APPROVED // 已通过
+  REJECTED // 已拒绝
+  EXPIRED  // 已过期（24h超时）
+  VOIDED   // 已作废（目标状态变更导致）
+}
+
 enum ConfirmationStatus {
   PENDING  // 待确认
   APPROVED // 已同意
@@ -111,6 +126,7 @@ model Goal {
   createdBy     User               @relation(fields: [createdById], references: [id])
   confirmations GoalConfirmation[]
   participants  GoalParticipant[]
+  changeRequests GoalChangeRequest[]
 
   @@map("goals")
 }
@@ -157,4 +173,37 @@ model CategoryCompletion {
 
   @@unique([groupId, userId, category])
   @@map("category_completions")
+}
+
+model GoalChangeRequest {
+  id              Int                     @id @default(autoincrement())
+  goalId          Int                     @map("goal_id")
+  type            GoalChangeRequestType
+  status          GoalChangeRequestStatus @default(PENDING)
+  initiatorId     Int                     @map("initiator_id")
+  proposedChanges Json?                   @map("proposed_changes")
+  expiresAt       DateTime                @map("expires_at")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+
+  goal      Goal              @relation(fields: [goalId], references: [id])
+  initiator GroupMember        @relation(fields: [initiatorId], references: [id])
+  votes     GoalChangeVote[]
+
+  @@map("goal_change_requests")
+}
+
+model GoalChangeVote {
+  id        Int                @id @default(autoincrement())
+  requestId Int                @map("request_id")
+  memberId  Int                @map("member_id")
+  status    ConfirmationStatus @default(PENDING)
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+
+  request GoalChangeRequest @relation(fields: [requestId], references: [id])
+  member  GroupMember        @relation(fields: [memberId], references: [id])
+
+  @@unique([requestId, memberId])
+  @@map("goal_change_votes")
 }

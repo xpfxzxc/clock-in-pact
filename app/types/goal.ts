@@ -9,6 +9,8 @@ export type GoalStatus =
 
 export type ConfirmationStatus = "PENDING" | "APPROVED" | "REJECTED";
 
+import type { GoalChangeRequestResponse } from "./goal-change-request";
+
 export interface CreateGoalRequest {
   groupId: number;
   name: string;
@@ -46,6 +48,7 @@ export interface GoalDetailResponse extends GoalResponse {
   participants: GoalParticipantInfo[];
   myConfirmationStatus?: ConfirmationStatus;
   isParticipant?: boolean;
+  activeChangeRequest?: GoalChangeRequestResponse | null;
 }
 
 export interface GoalConfirmationInfo {

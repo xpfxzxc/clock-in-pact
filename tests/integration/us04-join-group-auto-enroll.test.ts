@@ -49,6 +49,8 @@ describeIntegration("integration US-04 场景5：加入时有待开始/进行中
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.goalChangeVote.deleteMany();
+    await prisma.goalChangeRequest.deleteMany();
     await prisma.goalParticipant.deleteMany();
     await prisma.goalConfirmation.deleteMany();
     await prisma.goal.deleteMany();

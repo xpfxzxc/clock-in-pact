@@ -5,6 +5,7 @@ import {
   confirmGoal,
   createGoal,
   getDurationLimit,
+  getGoalDetail,
   listGroupGoals,
   type GoalPrismaClient,
 } from "../../server/services/goal.service";
@@ -44,6 +45,8 @@ function createPrismaMock() {
   const goalConfirmationFindUniqueMock = vi.fn();
   const goalConfirmationFindManyMock = vi.fn();
   const goalConfirmationUpdateMock = vi.fn();
+  const goalChangeRequestUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
+  const goalChangeRequestFindFirstMock = vi.fn();
 
   const goalParticipantCreateManyMock = vi.fn();
   const categoryCompletionFindManyMock = vi.fn();
@@ -70,6 +73,10 @@ function createPrismaMock() {
         findUnique: goalConfirmationFindUniqueMock,
         findMany: goalConfirmationFindManyMock,
         update: goalConfirmationUpdateMock,
+      },
+      goalChangeRequest: {
+        findFirst: goalChangeRequestFindFirstMock,
+        updateMany: goalChangeRequestUpdateManyMock,
       },
       goalParticipant: {
         createMany: goalParticipantCreateManyMock,
@@ -106,6 +113,11 @@ function createPrismaMock() {
         goalConfirmationFindManyMock as unknown as GoalPrismaClient["goalConfirmation"]["findMany"],
       update: goalConfirmationUpdateMock as unknown as GoalPrismaClient["goalConfirmation"]["update"],
     },
+    goalChangeRequest: {
+      findFirst: goalChangeRequestFindFirstMock as unknown as GoalPrismaClient["goalChangeRequest"]["findFirst"],
+      updateMany:
+        goalChangeRequestUpdateManyMock as unknown as GoalPrismaClient["goalChangeRequest"]["updateMany"],
+    },
     goalParticipant: {
       createMany: goalParticipantCreateManyMock as unknown as GoalPrismaClient["goalParticipant"]["createMany"],
     },
@@ -131,6 +143,8 @@ function createPrismaMock() {
       goalConfirmationFindUnique: goalConfirmationFindUniqueMock,
       goalConfirmationFindMany: goalConfirmationFindManyMock,
       goalConfirmationUpdate: goalConfirmationUpdateMock,
+      goalChangeRequestUpdateMany: goalChangeRequestUpdateManyMock,
+      goalChangeRequestFindFirst: goalChangeRequestFindFirstMock,
       goalParticipantCreateMany: goalParticipantCreateManyMock,
       categoryCompletionFindMany: categoryCompletionFindManyMock,
     },
@@ -338,6 +352,130 @@ describe("goal.service listGroupGoals（不自动推进状态）", () => {
   });
 });
 
+describe("goal.service getGoalDetail", () => {
+  it("场景10：有效截止时间已到时，activeChangeRequest 应过期并不返回", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-03-15T16:00:00.000Z")); // Asia/Shanghai = 2026-03-16 00:00:00
+
+    mocks.goalFindUnique.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      name: "跑步挑战",
+      category: "跑步",
+      targetValue: 60,
+      unit: "km",
+      startDate: new Date(Date.UTC(2026, 2, 20)),
+      endDate: new Date(Date.UTC(2026, 3, 20)),
+      rewardPunishment: "失败者请成功者吃饭",
+      evidenceRequirement: "跑步APP截图",
+      status: "UPCOMING",
+      createdById: 1,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      createdBy: { id: 1, nickname: "创建者" },
+      confirmations: [],
+      participants: [],
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 100 });
+    mocks.goalChangeRequestFindFirst.mockResolvedValueOnce({
+      id: 501,
+      goalId: 10,
+      type: "MODIFY",
+      status: "PENDING",
+      initiatorId: 100,
+      proposedChanges: { startDate: "2026-03-16" },
+      expiresAt: new Date("2026-03-16T10:00:00.000Z"),
+      createdAt: new Date("2026-03-15T10:00:00.000Z"),
+      initiator: { user: { nickname: "创建者" } },
+      goal: { group: { timezone: "Asia/Shanghai" } },
+      votes: [
+        {
+          memberId: 100,
+          status: "APPROVED",
+          updatedAt: new Date("2026-03-15T10:00:00.000Z"),
+          member: { userId: 1, role: "SUPERVISOR", user: { nickname: "创建者" } },
+        },
+      ],
+    });
+
+    const result = await getGoalDetail(10, 1, { prisma, now: () => new Date() });
+
+    expect(result.activeChangeRequest).toBeNull();
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        goalId: 10,
+        status: "PENDING",
+        expiresAt: { lte: new Date("2026-03-15T16:00:00.000Z") },
+      },
+      data: { status: "EXPIRED" },
+    });
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 501, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    });
+  });
+
+  it("场景12：新结束日期有效截止时间已到时，activeChangeRequest 应过期并不返回", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-03-15T16:00:00.000Z")); // Asia/Shanghai = 2026-03-16 00:00:00
+
+    mocks.goalFindUnique.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      name: "跑步挑战",
+      category: "跑步",
+      targetValue: 60,
+      unit: "km",
+      startDate: new Date(Date.UTC(2026, 2, 20)),
+      endDate: new Date(Date.UTC(2026, 3, 20)),
+      rewardPunishment: "失败者请成功者吃饭",
+      evidenceRequirement: "跑步APP截图",
+      status: "ACTIVE",
+      createdById: 1,
+      createdAt: new Date("2026-03-01T00:00:00.000Z"),
+      createdBy: { id: 1, nickname: "创建者" },
+      confirmations: [],
+      participants: [],
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 100 });
+    mocks.goalChangeRequestFindFirst.mockResolvedValueOnce({
+      id: 502,
+      goalId: 10,
+      type: "MODIFY",
+      status: "PENDING",
+      initiatorId: 100,
+      proposedChanges: { endDate: "2026-03-16" },
+      expiresAt: new Date("2026-03-16T10:00:00.000Z"),
+      createdAt: new Date("2026-03-15T10:00:00.000Z"),
+      initiator: { user: { nickname: "创建者" } },
+      goal: { group: { timezone: "Asia/Shanghai" } },
+      votes: [
+        {
+          memberId: 100,
+          status: "APPROVED",
+          updatedAt: new Date("2026-03-15T10:00:00.000Z"),
+          member: { userId: 1, role: "SUPERVISOR", user: { nickname: "创建者" } },
+        },
+      ],
+    });
+
+    const result = await getGoalDetail(10, 1, { prisma, now: () => new Date() });
+
+    expect(result.activeChangeRequest).toBeNull();
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        goalId: 10,
+        status: "PENDING",
+        expiresAt: { lte: new Date("2026-03-15T16:00:00.000Z") },
+      },
+      data: { status: "EXPIRED" },
+    });
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 502, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    });
+  });
+});
+
 describe("goal.service getDurationLimit", () => {
   it("按时长阶梯返回所有挑战者中最短的可创建周期", async () => {
     const { prisma, mocks } = createPrismaMock();
@@ -400,6 +538,10 @@ describe("goal.service confirmGoal", () => {
       where: { id: 10, status: "PENDING" },
       data: { status: "VOIDED" },
     });
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenCalledWith({
+      where: { goalId: 10, status: "PENDING" },
+      data: { status: "VOIDED" },
+    });
     expect(mocks.goalConfirmationFindUnique).not.toHaveBeenCalled();
     expect(mocks.goalConfirmationUpdate).not.toHaveBeenCalled();
   });
@@ -421,6 +563,10 @@ describe("goal.service confirmGoal", () => {
     const result = await confirmGoal(10, 1, "REJECTED", { prisma });
 
     expect(result).toEqual({ goalId: 10, status: "REJECTED", goalStatus: "VOIDED" });
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenCalledWith({
+      where: { goalId: 10, status: "PENDING" },
+      data: { status: "VOIDED" },
+    });
     expect(mocks.goalParticipantCreateMany).not.toHaveBeenCalled();
   });
 

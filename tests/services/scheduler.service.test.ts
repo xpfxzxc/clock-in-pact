@@ -21,6 +21,9 @@ import { runGoalStatusSchedulerTick, startGoalStatusScheduler } from "../../serv
 function createPrismaMock() {
   const groupFindManyMock = vi.fn();
   const goalUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
+  const goalFindManyMock = vi.fn().mockResolvedValue([]);
+  const goalChangeRequestUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
+  const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
 
   const prisma = {
     group: {
@@ -28,6 +31,11 @@ function createPrismaMock() {
     },
     goal: {
       updateMany: goalUpdateManyMock,
+      findMany: goalFindManyMock,
+    },
+    goalChangeRequest: {
+      updateMany: goalChangeRequestUpdateManyMock,
+      findMany: goalChangeRequestFindManyMock,
     },
   };
 
@@ -36,6 +44,9 @@ function createPrismaMock() {
     mocks: {
       groupFindMany: groupFindManyMock,
       goalUpdateMany: goalUpdateManyMock,
+      goalFindMany: goalFindManyMock,
+      goalChangeRequestUpdateMany: goalChangeRequestUpdateManyMock,
+      goalChangeRequestFindMany: goalChangeRequestFindManyMock,
     },
   };
 }
@@ -189,6 +200,120 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
       processedTimezoneCount: 0,
     });
     expect(mocks.goalUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("会处理变更请求：过期请求标记 EXPIRED，待结算目标下请求标记 VOIDED", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-02-05T16:00:00.000Z"));
+
+    mocks.groupFindMany.mockResolvedValueOnce([]);
+
+    const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
+
+    expect(result).toMatchObject({
+      activatedCount: 0,
+      voidedCount: 0,
+      expiredChangeRequestCount: 0,
+      voidedChangeRequestCount: 0,
+      checkedGroupCount: 0,
+    });
+
+    expect(mocks.goalChangeRequestUpdateMany).toHaveBeenCalledTimes(2);
+    expect(mocks.goalChangeRequestUpdateMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { status: "PENDING", expiresAt: { lte: new Date("2026-02-05T16:00:00.000Z") } },
+      data: { status: "EXPIRED" },
+    });
+    expect(mocks.goalChangeRequestUpdateMany.mock.calls[1]?.[0]).toMatchObject({
+      where: {
+        status: "PENDING",
+        goal: { status: "SETTLING" },
+      },
+      data: { status: "VOIDED" },
+    });
+  });
+
+  it("修改请求含新开始日期且该日期到达时：请求自动 EXPIRED（场景10）", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-02-05T16:00:00.000Z")); // Asia/Shanghai = 2026-02-06
+
+    mocks.goalChangeRequestFindMany.mockResolvedValueOnce([
+      {
+        id: 11,
+        expiresAt: new Date("2026-02-06T23:00:00.000Z"),
+        proposedChanges: { startDate: "2026-02-06" },
+        goal: { group: { timezone: "Asia/Shanghai" } },
+      },
+      {
+        id: 12,
+        expiresAt: new Date("2026-02-07T23:00:00.000Z"),
+        proposedChanges: { startDate: "2026-02-07" },
+        goal: { group: { timezone: "Asia/Shanghai" } },
+      },
+    ]);
+    mocks.groupFindMany.mockResolvedValueOnce([]);
+    mocks.goalChangeRequestUpdateMany
+      .mockResolvedValueOnce({ count: 1 }) // expiredByProposedStart
+      .mockResolvedValueOnce({ count: 0 }) // expired
+      .mockResolvedValueOnce({ count: 0 }); // settling
+
+    const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
+
+    expect(result).toMatchObject({
+      voidedChangeRequestCount: 0,
+      expiredChangeRequestCount: 1,
+    });
+
+    expect(mocks.goalChangeRequestFindMany).toHaveBeenCalledWith({
+      where: { status: "PENDING", type: "MODIFY" },
+      select: {
+        id: true,
+        expiresAt: true,
+        proposedChanges: true,
+        goal: { select: { group: { select: { timezone: true } } } },
+      },
+    });
+
+    expect(mocks.goalChangeRequestUpdateMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { id: { in: [11] }, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    });
+  });
+
+  it("修改请求含新结束日期且该日期到达时：请求自动 EXPIRED（场景12）", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-02-05T16:00:00.000Z")); // Asia/Shanghai = 2026-02-06
+
+    mocks.goalChangeRequestFindMany.mockResolvedValueOnce([
+      {
+        id: 21,
+        expiresAt: new Date("2026-02-06T23:00:00.000Z"),
+        proposedChanges: { endDate: "2026-02-06" },
+        goal: { group: { timezone: "Asia/Shanghai" } },
+      },
+      {
+        id: 22,
+        expiresAt: new Date("2026-02-07T23:00:00.000Z"),
+        proposedChanges: { endDate: "2026-02-07" },
+        goal: { group: { timezone: "Asia/Shanghai" } },
+      },
+    ]);
+    mocks.groupFindMany.mockResolvedValueOnce([]);
+    mocks.goalChangeRequestUpdateMany
+      .mockResolvedValueOnce({ count: 1 }) // expiredByProposedDate
+      .mockResolvedValueOnce({ count: 0 }) // expired
+      .mockResolvedValueOnce({ count: 0 }); // settling
+
+    const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
+
+    expect(result).toMatchObject({
+      voidedChangeRequestCount: 0,
+      expiredChangeRequestCount: 1,
+    });
+
+    expect(mocks.goalChangeRequestUpdateMany.mock.calls[0]?.[0]).toMatchObject({
+      where: { id: { in: [21] }, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    });
   });
 });
 

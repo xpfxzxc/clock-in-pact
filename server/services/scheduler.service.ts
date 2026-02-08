@@ -16,6 +16,8 @@ export type GoalStatusSchedulerDeps = {
 export type GoalStatusSchedulerTickResult = {
   activatedCount: number;
   voidedCount: number;
+  expiredChangeRequestCount: number;
+  voidedChangeRequestCount: number;
   checkedGroupCount: number;
   checkedTimezoneCount: number;
   processedTimezoneCount: number;
@@ -92,6 +94,83 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
   const now = deps.now?.() ?? new Date();
   const tomorrowUtcMidnight = getTomorrowUtcMidnight(now);
 
+  // 修改请求中新开始/结束日期到达后自动过期（独立于 24h 超时；以先到者为准）
+  const pendingModifyRequests = await deps.prisma.goalChangeRequest.findMany({
+    where: { status: "PENDING", type: "MODIFY" },
+    select: {
+      id: true,
+      expiresAt: true,
+      proposedChanges: true,
+      goal: { select: { group: { select: { timezone: true } } } },
+    },
+  });
+
+  const reachedProposedDateRequestIds: number[] = [];
+  for (const request of pendingModifyRequests) {
+    const changes = request.proposedChanges as Record<string, unknown> | null;
+    const proposedStartDate = typeof changes?.startDate === "string" ? changes.startDate : null;
+    const proposedEndDate = typeof changes?.endDate === "string" ? changes.endDate : null;
+    const proposedDate = proposedStartDate ?? proposedEndDate;
+    if (!proposedDate) {
+      continue;
+    }
+
+    const timeZone = request.goal?.group?.timezone ?? "UTC";
+    const todayDate = getTodayUtcDateForTimeZone(now, timeZone);
+    if (!todayDate) {
+      deps.logger?.error?.(`[scheduler] Invalid timezone "${timeZone}", skip request ${request.id}.`);
+      continue;
+    }
+
+    let proposedDateUtc: Date;
+    try {
+      proposedDateUtc = parseDateOnly(proposedDate);
+    } catch {
+      deps.logger?.error?.(`[scheduler] Invalid proposed date in request ${request.id}, skip.`);
+      continue;
+    }
+
+    if (proposedDateUtc.getTime() > todayDate.getTime()) {
+      continue;
+    }
+
+    // 若超时也已到，按“先到者为准”判断：
+    // - 超时时区日期早于新提议日期：EXPIRED 先发生
+    // - 其他情况（同日或更晚）：新提议日期先/同时发生，过期请求
+    if (request.expiresAt.getTime() <= now.getTime()) {
+      const expiresDateInGroup = formatDateOnlyInTimeZone(request.expiresAt, timeZone);
+      if (expiresDateInGroup < proposedDate) {
+        continue;
+      }
+    }
+
+    reachedProposedDateRequestIds.push(request.id);
+  }
+
+  const expiredByProposedDate = reachedProposedDateRequestIds.length
+    ? await deps.prisma.goalChangeRequest.updateMany({
+        where: { id: { in: reachedProposedDateRequestIds }, status: "PENDING" },
+        data: { status: "EXPIRED" },
+      })
+    : { count: 0 };
+
+  // 过期超时的变更请求
+  const expiredRequests = await deps.prisma.goalChangeRequest.updateMany({
+    where: { status: "PENDING", expiresAt: { lte: now } },
+    data: { status: "EXPIRED" },
+  });
+
+  // 进行中目标进入待结算后：该目标下所有待确认请求自动作废
+  const voidedBySettling = await deps.prisma.goalChangeRequest.updateMany({
+    where: {
+      status: "PENDING",
+      goal: {
+        status: "SETTLING",
+      },
+    },
+    data: { status: "VOIDED" },
+  });
+
   const groups = await deps.prisma.group.findMany({
     where: {
       goals: {
@@ -108,6 +187,7 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
 
   let activatedCount = 0;
   let voidedCount = 0;
+  let voidedChangeRequestCount = 0;
   let processedTimezoneCount = 0;
 
   for (const [timeZone, groupIds] of grouped) {
@@ -118,6 +198,7 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     }
     processedTimezoneCount += 1;
 
+    // UPCOMING → ACTIVE
     const activated = await deps.prisma.goal.updateMany({
       where: {
         groupId: { in: groupIds },
@@ -127,6 +208,46 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       data: { status: "ACTIVE" },
     });
 
+    // UPCOMING→ACTIVE 后：作废含 startDate 修改的 MODIFY 请求（CANCEL 请求不受影响）
+    if (activated.count > 0) {
+      const activatedGoals = await deps.prisma.goal.findMany({
+        where: {
+          groupId: { in: groupIds },
+          status: "ACTIVE",
+          startDate: { lte: todayDate },
+        },
+        select: { id: true },
+      });
+      const activatedGoalIds = activatedGoals.map((g: { id: number }) => g.id);
+
+      if (activatedGoalIds.length > 0) {
+        // 查找含 startDate 修改的 MODIFY 请求
+        const modifyRequests = await deps.prisma.goalChangeRequest.findMany({
+          where: {
+            goalId: { in: activatedGoalIds },
+            status: "PENDING",
+            type: "MODIFY",
+          },
+          select: { id: true, proposedChanges: true },
+        });
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const requestsWithStartDate = modifyRequests.filter((r: any) => {
+          const changes = r.proposedChanges as Record<string, unknown> | null;
+          return changes && changes.startDate !== undefined;
+        });
+
+        if (requestsWithStartDate.length > 0) {
+          const voidedReqs = await deps.prisma.goalChangeRequest.updateMany({
+            where: { id: { in: requestsWithStartDate.map((r: { id: number }) => r.id) } },
+            data: { status: "VOIDED" },
+          });
+          voidedChangeRequestCount += voidedReqs.count;
+        }
+      }
+    }
+
+    // PENDING → VOIDED
     const voided = await deps.prisma.goal.updateMany({
       where: {
         groupId: { in: groupIds },
@@ -136,6 +257,27 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       data: { status: "VOIDED" },
     });
 
+    // PENDING→VOIDED 后：作废相关请求
+    if (voided.count > 0) {
+      const voidedGoals = await deps.prisma.goal.findMany({
+        where: {
+          groupId: { in: groupIds },
+          status: "VOIDED",
+          startDate: { lte: todayDate },
+        },
+        select: { id: true },
+      });
+      const voidedGoalIds = voidedGoals.map((g: { id: number }) => g.id);
+
+      if (voidedGoalIds.length > 0) {
+        const voidedReqs = await deps.prisma.goalChangeRequest.updateMany({
+          where: { goalId: { in: voidedGoalIds }, status: "PENDING" },
+          data: { status: "VOIDED" },
+        });
+        voidedChangeRequestCount += voidedReqs.count;
+      }
+    }
+
     activatedCount += activated.count;
     voidedCount += voided.count;
   }
@@ -143,6 +285,8 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
   return {
     activatedCount,
     voidedCount,
+    expiredChangeRequestCount: expiredRequests.count + expiredByProposedDate.count,
+    voidedChangeRequestCount: voidedChangeRequestCount + voidedBySettling.count,
     checkedGroupCount: groups.length,
     checkedTimezoneCount: grouped.size,
     processedTimezoneCount,
@@ -180,9 +324,10 @@ export async function startGoalStatusScheduler(
     isRunning = true;
     try {
       const result = await runGoalStatusSchedulerTick(deps);
-      if (result.activatedCount > 0 || result.voidedCount > 0) {
+      if (result.activatedCount > 0 || result.voidedCount > 0 || result.expiredChangeRequestCount > 0 || result.voidedChangeRequestCount > 0) {
         logger.info?.(
           `[scheduler] Goal status updated: activated=${result.activatedCount}, voided=${result.voidedCount}, ` +
+            `expiredRequests=${result.expiredChangeRequestCount}, voidedRequests=${result.voidedChangeRequestCount}, ` +
             `groups=${result.checkedGroupCount}, timezones=${result.processedTimezoneCount}/${result.checkedTimezoneCount}.`
         );
       }
