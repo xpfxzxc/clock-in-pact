@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ConfirmGoalResponse, GoalDetailResponse } from '~/types/goal'
 import type { GoalChangeRequestResponse, VoteGoalChangeRequestResponse } from '~/types/goal-change-request'
+import type { CheckinListResponse } from '~/types/checkin'
 
 definePageMeta({
   middleware: 'auth',
@@ -11,6 +12,11 @@ const groupId = Number(route.params.id)
 const goalId = Number(route.params.goalId)
 
 const { data: goal, refresh, error } = await useFetch<GoalDetailResponse>(`/api/goals/${goalId}`)
+
+const { data: checkinList, refresh: refreshCheckins } = await useFetch<CheckinListResponse>(
+  `/api/goals/${goalId}/checkins`,
+  { default: () => ({ checkins: [], total: 0 }) },
+)
 
 useHead({
   title: computed(() => goal.value ? `${goal.value.name} - 打卡契约` : '目标详情 - 打卡契约'),
@@ -291,6 +297,32 @@ const canConfirm = computed(() => {
   if (!goal.value) return false
   return goal.value.status === 'PENDING' && goal.value.myConfirmationStatus === 'PENDING'
 })
+
+const canCheckin = computed(() => {
+  if (!goal.value) return false
+  return goal.value.status === 'ACTIVE' && goal.value.isParticipant
+})
+
+function getCheckinStatusText(status: string) {
+  const statusMap: Record<string, string> = {
+    PENDING_REVIEW: '待审核',
+    CONFIRMED: '已确认',
+    DISPUTED: '质疑',
+    AUTO_APPROVED: '自动通过',
+  }
+  return statusMap[status] || status
+}
+
+function getCheckinStatusClass(status: string) {
+  const classMap: Record<string, string> = {
+    PENDING_REVIEW: 'bg-yellow-100 text-yellow-800',
+    CONFIRMED: 'bg-green-100 text-green-800',
+    DISPUTED: 'bg-red-100 text-red-800',
+    AUTO_APPROVED: 'bg-blue-100 text-blue-800',
+  }
+  return classMap[status] || 'bg-gray-100 text-gray-800'
+}
+
 </script>
 
 <template>
@@ -441,6 +473,62 @@ const canConfirm = computed(() => {
                 <span class="text-xs font-medium text-primary">{{ participant.nickname[0] }}</span>
               </div>
               <span class="text-sm text-foreground">{{ participant.nickname }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 打卡按钮 -->
+        <div v-if="canCheckin" class="flex">
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/checkin`"
+            class="flex-1 py-3 px-4 bg-primary text-white font-medium rounded-lg shadow-lg hover:bg-primary/90 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:check-circle" class="w-5 h-5" />
+            打卡
+          </NuxtLink>
+        </div>
+
+        <!-- 打卡记录 -->
+        <div v-if="['ACTIVE', 'SETTLING', 'ARCHIVED'].includes(goal.status) && checkinList.checkins.length > 0" class="bg-white rounded-2xl shadow-lg p-6">
+          <h3 class="text-lg font-semibold text-foreground mb-4">
+            打卡记录 ({{ checkinList.total }})
+          </h3>
+          <div class="space-y-4">
+            <div
+              v-for="checkin in checkinList.checkins"
+              :key="checkin.id"
+              class="border-b border-gray-100 last:border-0 pb-4 last:pb-0"
+            >
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <div class="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
+                    <span class="text-xs font-medium text-primary">{{ checkin.createdByNickname[0] }}</span>
+                  </div>
+                  <span class="text-sm font-medium text-foreground">{{ checkin.createdByNickname }}</span>
+                </div>
+                <span :class="['px-2 py-0.5 rounded-full text-xs font-medium', getCheckinStatusClass(checkin.status)]">
+                  {{ getCheckinStatusText(checkin.status) }}
+                </span>
+              </div>
+              <div class="ml-9">
+                <p class="text-sm text-foreground">
+                  <span class="font-semibold">{{ checkin.value }}</span> {{ goal.unit }}
+                  <span class="text-gray-400 ml-2">{{ checkin.checkinDate }}</span>
+                </p>
+                <p v-if="checkin.note" class="text-sm text-gray-500 mt-1">{{ checkin.note }}</p>
+                <div v-if="checkin.evidence.length > 0" class="flex flex-wrap gap-2 mt-2">
+                  <div v-viewer="{ navbar: false }" class="flex flex-wrap gap-2">
+                    <img
+                      v-for="ev in checkin.evidence"
+                      :key="ev.id"
+                      :src="ev.filePath"
+                      alt="证据截图"
+                      class="w-16 h-16 rounded-lg object-cover bg-gray-100 cursor-pointer hover:opacity-80 transition-opacity"
+                    />
+                  </div>
+                </div>
+                <p class="text-xs text-gray-400 mt-1">{{ new Date(checkin.createdAt).toLocaleString('zh-CN') }}</p>
+              </div>
             </div>
           </div>
         </div>

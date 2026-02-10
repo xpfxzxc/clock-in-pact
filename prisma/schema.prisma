@@ -58,6 +58,7 @@ model GroupMember {
   goalParticipants  GoalParticipant[]
   goalChangeRequests GoalChangeRequest[]
   goalChangeVotes    GoalChangeVote[]
+  checkins           Checkin[]
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -85,6 +86,13 @@ enum GoalStatus {
   ARCHIVED  // 已归档
   VOIDED    // 已作废（开始日期到达但未全员同意）
   CANCELLED // 已取消（全员同意取消）
+}
+
+enum CheckinStatus {
+  PENDING_REVIEW // 待审核
+  CONFIRMED      // 已确认
+  DISPUTED       // 质疑
+  AUTO_APPROVED  // 自动通过
 }
 
 enum GoalChangeRequestType {
@@ -127,6 +135,7 @@ model Goal {
   confirmations GoalConfirmation[]
   participants  GoalParticipant[]
   changeRequests GoalChangeRequest[]
+  checkins      Checkin[]
 
   @@map("goals")
 }
@@ -206,4 +215,34 @@ model GoalChangeVote {
 
   @@unique([requestId, memberId])
   @@map("goal_change_votes")
+}
+
+model Checkin {
+  id          Int           @id @default(autoincrement())
+  goalId      Int           @map("goal_id")
+  memberId    Int           @map("member_id")
+  checkinDate DateTime      @map("checkin_date") @db.Date
+  value       Decimal       @db.Decimal(10, 2)
+  note        String?       @db.VarChar(500)
+  status      CheckinStatus @default(PENDING_REVIEW)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  goal     Goal              @relation(fields: [goalId], references: [id])
+  member   GroupMember       @relation(fields: [memberId], references: [id])
+  evidence CheckinEvidence[]
+
+  @@map("checkins")
+}
+
+model CheckinEvidence {
+  id        Int      @id @default(autoincrement())
+  checkinId Int      @map("checkin_id")
+  filePath  String   @map("file_path") @db.VarChar(500)
+  fileSize  Int      @map("file_size")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  checkin Checkin @relation(fields: [checkinId], references: [id])
+
+  @@map("checkin_evidences")
 }
