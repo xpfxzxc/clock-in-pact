@@ -549,14 +549,22 @@ function getReviewActionClass(action: string) {
           </div>
         </div>
 
-        <!-- 打卡按钮 -->
-        <div v-if="canCheckin" class="flex">
+        <!-- 操作按钮：打卡 + 查看进度 -->
+        <div v-if="goal.status === 'ACTIVE'" class="flex gap-3">
           <NuxtLink
+            v-if="canCheckin"
             :to="`/groups/${groupId}/goals/${goalId}/checkin`"
             class="flex-1 py-3 px-4 bg-primary text-white font-medium rounded-lg shadow-lg hover:bg-primary/90 transition-colors text-center flex items-center justify-center gap-2"
           >
             <Icon name="lucide:check-circle" class="w-5 h-5" />
             打卡
+          </NuxtLink>
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/progress`"
+            class="flex-1 py-3 px-4 bg-white text-primary font-medium rounded-lg shadow-lg hover:bg-gray-50 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:bar-chart-3" class="w-5 h-5" />
+            查看进度
           </NuxtLink>
         </div>
 
