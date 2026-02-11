@@ -82,6 +82,7 @@ describeIntegration("integration US-07 打卡记录", () => {
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.checkinReview.deleteMany();
     await prisma.checkinEvidence.deleteMany();
     await prisma.checkin.deleteMany();
     await prisma.goalChangeVote.deleteMany();
