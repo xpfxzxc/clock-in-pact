@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ConfirmGoalResponse, GoalDetailResponse } from '~/types/goal'
 import type { GoalChangeRequestResponse, VoteGoalChangeRequestResponse } from '~/types/goal-change-request'
-import type { CheckinListResponse } from '~/types/checkin'
+import type { CheckinListResponse, ReviewCheckinResponse } from '~/types/checkin'
 
 definePageMeta({
   middleware: 'auth',
@@ -323,6 +323,78 @@ function getCheckinStatusClass(status: string) {
   return classMap[status] || 'bg-gray-100 text-gray-800'
 }
 
+// --- 打卡审核相关 ---
+const isSupervisor = computed(() => goal.value?.myRole === 'SUPERVISOR')
+
+const isReviewing = ref(false)
+const reviewError = ref('')
+const disputeCheckinId = ref<number | null>(null)
+const disputeReason = ref('')
+
+function canReviewCheckin(checkin: CheckinListResponse['checkins'][number]) {
+  return isSupervisor.value && checkin.status === 'PENDING_REVIEW' && checkin.myReviewAction === null
+}
+
+async function handleReviewConfirm(checkinId: number) {
+  isReviewing.value = true
+  reviewError.value = ''
+
+  try {
+    await $fetch<ReviewCheckinResponse>(`/api/checkins/${checkinId}/review`, {
+      method: 'POST',
+      body: { action: 'CONFIRMED' },
+    })
+    await refreshCheckins()
+  } catch (err: any) {
+    reviewError.value = err.data?.message || '审核失败，请稍后重试'
+  } finally {
+    isReviewing.value = false
+  }
+}
+
+function openDisputeForm(checkinId: number) {
+  disputeCheckinId.value = checkinId
+  disputeReason.value = ''
+  reviewError.value = ''
+}
+
+function closeDisputeForm() {
+  disputeCheckinId.value = null
+  disputeReason.value = ''
+}
+
+async function handleReviewDispute() {
+  if (!disputeCheckinId.value) return
+  if (!disputeReason.value.trim()) {
+    reviewError.value = '请填写质疑理由'
+    return
+  }
+
+  isReviewing.value = true
+  reviewError.value = ''
+
+  try {
+    await $fetch<ReviewCheckinResponse>(`/api/checkins/${disputeCheckinId.value}/review`, {
+      method: 'POST',
+      body: { action: 'DISPUTED', reason: disputeReason.value.trim() },
+    })
+    closeDisputeForm()
+    await refreshCheckins()
+  } catch (err: any) {
+    reviewError.value = err.data?.message || '审核失败，请稍后重试'
+  } finally {
+    isReviewing.value = false
+  }
+}
+
+function getReviewActionText(action: string) {
+  return action === 'CONFIRMED' ? '已确认' : '质疑'
+}
+
+function getReviewActionClass(action: string) {
+  return action === 'CONFIRMED' ? 'text-green-600' : 'text-red-600'
+}
+
 </script>
 
 <template>
@@ -493,6 +565,9 @@ function getCheckinStatusClass(status: string) {
           <h3 class="text-lg font-semibold text-foreground mb-4">
             打卡记录 ({{ checkinList.total }})
           </h3>
+          <div v-if="reviewError" class="mb-4 bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
+            {{ reviewError }}
+          </div>
           <div class="space-y-4">
             <div
               v-for="checkin in checkinList.checkins"
@@ -528,6 +603,68 @@ function getCheckinStatusClass(status: string) {
                   </div>
                 </div>
                 <p class="text-xs text-gray-400 mt-1">{{ new Date(checkin.createdAt).toLocaleString('zh-CN') }}</p>
+
+                <!-- 审核详情 -->
+                <div v-if="checkin.reviews && checkin.reviews.length > 0" class="mt-3 space-y-1.5">
+                  <p class="text-xs font-medium text-gray-500">审核记录：</p>
+                  <div
+                    v-for="review in checkin.reviews"
+                    :key="review.memberId"
+                    class="flex items-center gap-2 text-xs"
+                  >
+                    <span class="text-gray-600">{{ review.reviewerNickname }}</span>
+                    <span :class="getReviewActionClass(review.action)">{{ getReviewActionText(review.action) }}</span>
+                    <span v-if="review.reason" class="text-gray-400">— {{ review.reason }}</span>
+                  </div>
+                </div>
+
+                <!-- 审核操作 -->
+                <div v-if="canReviewCheckin(checkin)" class="mt-3">
+                  <!-- 质疑表单 -->
+                  <div v-if="disputeCheckinId === checkin.id" class="space-y-2">
+                    <textarea
+                      v-model="disputeReason"
+                      rows="2"
+                      placeholder="请填写质疑理由（必填）"
+                      class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+                    <div class="flex gap-2">
+                      <button
+                        :disabled="isReviewing"
+                        class="px-3 py-1.5 text-xs bg-red-500 text-white font-medium rounded-lg hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        @click="handleReviewDispute"
+                      >
+                        {{ isReviewing ? '提交中...' : '提交质疑' }}
+                      </button>
+                      <button
+                        :disabled="isReviewing"
+                        class="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors cursor-pointer"
+                        @click="closeDisputeForm"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                  <!-- 确认/质疑按钮 -->
+                  <div v-else class="flex gap-2">
+                    <button
+                      :disabled="isReviewing"
+                      class="px-3 py-1.5 text-xs bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      @click="handleReviewConfirm(checkin.id)"
+                    >
+                      <Icon name="lucide:check" class="w-3.5 h-3.5" />
+                      确认
+                    </button>
+                    <button
+                      :disabled="isReviewing"
+                      class="px-3 py-1.5 text-xs bg-red-500 text-white font-medium rounded-lg hover:bg-red-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      @click="openDisputeForm(checkin.id)"
+                    >
+                      <Icon name="lucide:alert-triangle" class="w-3.5 h-3.5" />
+                      质疑
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

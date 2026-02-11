@@ -24,6 +24,7 @@ function createPrismaMock() {
   const goalFindManyMock = vi.fn().mockResolvedValue([]);
   const goalChangeRequestUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
   const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
+  const checkinUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
 
   const prisma = {
     group: {
@@ -37,6 +38,9 @@ function createPrismaMock() {
       updateMany: goalChangeRequestUpdateManyMock,
       findMany: goalChangeRequestFindManyMock,
     },
+    checkin: {
+      updateMany: checkinUpdateManyMock,
+    },
   };
 
   return {
@@ -47,6 +51,7 @@ function createPrismaMock() {
       goalFindMany: goalFindManyMock,
       goalChangeRequestUpdateMany: goalChangeRequestUpdateManyMock,
       goalChangeRequestFindMany: goalChangeRequestFindManyMock,
+      checkinUpdateMany: checkinUpdateManyMock,
     },
   };
 }
@@ -313,6 +318,28 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
     expect(mocks.goalChangeRequestUpdateMany.mock.calls[0]?.[0]).toMatchObject({
       where: { id: { in: [21] }, status: "PENDING" },
       data: { status: "EXPIRED" },
+    });
+  });
+
+  it("超时3天自动通过待审核打卡", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-02-10T12:00:00.000Z"));
+
+    mocks.groupFindMany.mockResolvedValueOnce([]);
+    mocks.checkinUpdateMany.mockResolvedValueOnce({ count: 3 });
+
+    const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
+
+    expect(result).toMatchObject({
+      autoApprovedCheckinCount: 3,
+    });
+
+    expect(mocks.checkinUpdateMany).toHaveBeenCalledWith({
+      where: {
+        status: "PENDING_REVIEW",
+        createdAt: { lte: new Date("2026-02-07T12:00:00.000Z") },
+      },
+      data: { status: "AUTO_APPROVED" },
     });
   });
 });

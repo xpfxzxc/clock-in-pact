@@ -59,6 +59,7 @@ model GroupMember {
   goalChangeRequests GoalChangeRequest[]
   goalChangeVotes    GoalChangeVote[]
   checkins           Checkin[]
+  checkinReviews     CheckinReview[]
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -93,6 +94,11 @@ enum CheckinStatus {
   CONFIRMED      // 已确认
   DISPUTED       // 质疑
   AUTO_APPROVED  // 自动通过
+}
+
+enum CheckinReviewAction {
+  CONFIRMED // 确认
+  DISPUTED  // 质疑
 }
 
 enum GoalChangeRequestType {
@@ -231,6 +237,7 @@ model Checkin {
   goal     Goal              @relation(fields: [goalId], references: [id])
   member   GroupMember       @relation(fields: [memberId], references: [id])
   evidence CheckinEvidence[]
+  reviews  CheckinReview[]
 
   @@map("checkins")
 }
@@ -245,4 +252,19 @@ model CheckinEvidence {
   checkin Checkin @relation(fields: [checkinId], references: [id])
 
   @@map("checkin_evidences")
+}
+
+model CheckinReview {
+  id        Int                 @id @default(autoincrement())
+  checkinId Int                 @map("checkin_id")
+  memberId  Int                 @map("member_id")
+  action    CheckinReviewAction
+  reason    String?             @db.VarChar(500)
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  checkin Checkin     @relation(fields: [checkinId], references: [id])
+  member  GroupMember @relation(fields: [memberId], references: [id])
+
+  @@unique([checkinId, memberId])
+  @@map("checkin_reviews")
 }

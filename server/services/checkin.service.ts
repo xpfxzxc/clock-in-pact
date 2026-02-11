@@ -1,6 +1,6 @@
 import type { MemberRole, PrismaClient } from "@prisma/client";
 
-import type { CheckinEvidenceResponse, CheckinListResponse, CheckinResponse, CreateCheckinInput } from "../types/checkin";
+import type { CheckinEvidenceResponse, CheckinListResponse, CheckinResponse, CreateCheckinInput, ReviewCheckinInput, ReviewCheckinResponse } from "../types/checkin";
 import { AppError } from "../utils/app-error";
 
 const CHECKIN_NOTE_MAX_LENGTH = 500;
@@ -132,6 +132,11 @@ function assertPositiveInteger(value: unknown, message: string): asserts value i
   }
 }
 
+function isPrismaUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: unknown }).code === "P2002";
+}
+
 function assertEvidenceFiles(evidenceFiles: CheckinEvidenceFileInput[]): void {
   if (evidenceFiles.length < MIN_EVIDENCE_COUNT) {
     throw new AppError(400, "请至少上传1张图片");
@@ -167,6 +172,7 @@ function mapCheckinResponse(checkin: CheckinRecord): CheckinResponse {
       filePath: item.filePath,
       fileSize: item.fileSize,
     })),
+    reviews: [],
     createdByNickname: checkin.member.user.nickname,
     createdAt: checkin.createdAt.toISOString(),
   };
@@ -332,7 +338,7 @@ export async function listCheckins(
 ): Promise<CheckinListResponse> {
   assertPositiveInteger(goalId, "无效的目标 ID");
 
-  const { goal } = await ensureGoalAndMembership(goalId, userId, deps);
+  const { goal, member } = await ensureGoalAndMembership(goalId, userId, deps);
 
   const checkins = await deps.prisma.checkin.findMany({
     where: { goalId: goal.id },
@@ -351,12 +357,203 @@ export async function listCheckins(
           },
         },
       },
+      reviews: {
+        include: {
+          member: {
+            include: {
+              user: {
+                select: { nickname: true },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: { createdAt: "desc" },
   });
 
+  const isSupervisor = member.role === "SUPERVISOR";
+
   return {
-    checkins: checkins.map(mapCheckinResponse),
+    checkins: checkins.map((checkin: CheckinRecord & { reviews?: Array<{ memberId: number; action: string; reason: string | null; createdAt: Date; member: { user: { nickname: string } } }> }) => {
+      const response = mapCheckinResponse(checkin);
+      response.reviews = (checkin.reviews ?? []).map((r) => ({
+        memberId: r.memberId,
+        reviewerNickname: r.member.user.nickname,
+        action: r.action as "CONFIRMED" | "DISPUTED",
+        reason: r.reason,
+        createdAt: r.createdAt.toISOString(),
+      }));
+      if (isSupervisor) {
+        const myReview = (checkin.reviews ?? []).find((r) => r.memberId === member.id);
+        response.myReviewAction = myReview ? (myReview.action as "CONFIRMED" | "DISPUTED") : null;
+      }
+      return response;
+    }),
     total: checkins.length,
+  };
+}
+
+const REVIEW_REASON_MAX_LENGTH = 500;
+
+export async function reviewCheckin(
+  checkinId: number,
+  input: ReviewCheckinInput,
+  userId: number,
+  deps: { prisma: CheckinPrismaClient }
+): Promise<ReviewCheckinResponse> {
+  assertPositiveInteger(checkinId, "无效的打卡 ID");
+
+  if (input.action !== "CONFIRMED" && input.action !== "DISPUTED") {
+    throw new AppError(400, "无效的审核操作");
+  }
+
+  const checkin = await deps.prisma.checkin.findUnique({
+    where: { id: checkinId },
+    select: {
+      id: true,
+      status: true,
+      goal: {
+        select: {
+          id: true,
+          groupId: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  if (!checkin) {
+    throw new AppError(404, "打卡记录不存在");
+  }
+
+  if (checkin.status !== "PENDING_REVIEW") {
+    throw new AppError(400, "该打卡记录不在待审核状态");
+  }
+
+  const goalStatus = checkin.goal.status;
+  if (goalStatus !== "ACTIVE" && goalStatus !== "SETTLING") {
+    throw new AppError(400, "目标状态不允许审核");
+  }
+
+  const member = await deps.prisma.groupMember.findUnique({
+    where: {
+      groupId_userId: {
+        groupId: checkin.goal.groupId,
+        userId,
+      },
+    },
+    select: {
+      id: true,
+      role: true,
+    },
+  });
+
+  if (!member) {
+    throw new AppError(403, "您不是该小组成员");
+  }
+
+  if (member.role !== "SUPERVISOR") {
+    throw new AppError(403, "仅监督者可审核打卡");
+  }
+
+  const existingReview = await deps.prisma.checkinReview.findUnique({
+    where: {
+      checkinId_memberId: {
+        checkinId,
+        memberId: member.id,
+      },
+    },
+    select: { id: true },
+  });
+
+  if (existingReview) {
+    throw new AppError(400, "您已审核过该打卡记录");
+  }
+
+  if (input.action === "DISPUTED") {
+    if (!input.reason || typeof input.reason !== "string" || !input.reason.trim()) {
+      throw new AppError(400, "质疑必须填写理由");
+    }
+    if (input.reason.trim().length > REVIEW_REASON_MAX_LENGTH) {
+      throw new AppError(400, "质疑理由不能超过500字符");
+    }
+
+    try {
+      await deps.prisma.checkinReview.create({
+        data: {
+          checkinId,
+          memberId: member.id,
+          action: "DISPUTED",
+          reason: input.reason.trim(),
+        },
+      });
+    } catch (error) {
+      if (isPrismaUniqueConstraintError(error)) {
+        throw new AppError(400, "您已审核过该打卡记录");
+      }
+      throw error;
+    }
+
+    await deps.prisma.checkin.update({
+      where: { id: checkinId },
+      data: { status: "DISPUTED" },
+    });
+
+    return {
+      checkinId,
+      action: "DISPUTED",
+      checkinStatus: "DISPUTED",
+    };
+  }
+
+  // CONFIRMED
+  try {
+    await deps.prisma.checkinReview.create({
+      data: {
+        checkinId,
+        memberId: member.id,
+        action: "CONFIRMED",
+      },
+    });
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error)) {
+      throw new AppError(400, "您已审核过该打卡记录");
+    }
+    throw error;
+  }
+
+  const totalSupervisors = await deps.prisma.groupMember.count({
+    where: {
+      groupId: checkin.goal.groupId,
+      role: "SUPERVISOR",
+    },
+  });
+
+  const confirmedCount = await deps.prisma.checkinReview.count({
+    where: {
+      checkinId,
+      action: "CONFIRMED",
+    },
+  });
+
+  if (confirmedCount >= totalSupervisors) {
+    await deps.prisma.checkin.update({
+      where: { id: checkinId },
+      data: { status: "CONFIRMED" },
+    });
+
+    return {
+      checkinId,
+      action: "CONFIRMED",
+      checkinStatus: "CONFIRMED",
+    };
+  }
+
+  return {
+    checkinId,
+    action: "CONFIRMED",
+    checkinStatus: "PENDING_REVIEW",
   };
 }

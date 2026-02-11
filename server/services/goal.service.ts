@@ -421,7 +421,7 @@ export async function getGoalDetail(
 
   const membership = await deps.prisma.groupMember.findUnique({
     where: { groupId_userId: { groupId: goal.groupId, userId } },
-    select: { id: true },
+    select: { id: true, role: true },
   });
   if (!membership) {
     throw new AppError(403, "您不是该小组成员");
@@ -455,6 +455,7 @@ export async function getGoalDetail(
   });
 
   const detail = mapGoalDetailResponse(goal, userId);
+  detail.myRole = membership.role;
 
   if (activeChangeRequest) {
     const effectiveExpiresAt = getGoalChangeRequestEffectiveExpiresAt({

@@ -18,6 +18,7 @@ export type GoalStatusSchedulerTickResult = {
   voidedCount: number;
   expiredChangeRequestCount: number;
   voidedChangeRequestCount: number;
+  autoApprovedCheckinCount: number;
   checkedGroupCount: number;
   checkedTimezoneCount: number;
   processedTimezoneCount: number;
@@ -282,11 +283,22 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     voidedCount += voided.count;
   }
 
+  // 超时3天自动通过打卡
+  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const autoApproved = await deps.prisma.checkin.updateMany({
+    where: {
+      status: "PENDING_REVIEW",
+      createdAt: { lte: threeDaysAgo },
+    },
+    data: { status: "AUTO_APPROVED" },
+  });
+
   return {
     activatedCount,
     voidedCount,
     expiredChangeRequestCount: expiredRequests.count + expiredByProposedDate.count,
     voidedChangeRequestCount: voidedChangeRequestCount + voidedBySettling.count,
+    autoApprovedCheckinCount: autoApproved.count,
     checkedGroupCount: groups.length,
     checkedTimezoneCount: grouped.size,
     processedTimezoneCount,
@@ -324,10 +336,11 @@ export async function startGoalStatusScheduler(
     isRunning = true;
     try {
       const result = await runGoalStatusSchedulerTick(deps);
-      if (result.activatedCount > 0 || result.voidedCount > 0 || result.expiredChangeRequestCount > 0 || result.voidedChangeRequestCount > 0) {
+      if (result.activatedCount > 0 || result.voidedCount > 0 || result.expiredChangeRequestCount > 0 || result.voidedChangeRequestCount > 0 || result.autoApprovedCheckinCount > 0) {
         logger.info?.(
           `[scheduler] Goal status updated: activated=${result.activatedCount}, voided=${result.voidedCount}, ` +
             `expiredRequests=${result.expiredChangeRequestCount}, voidedRequests=${result.voidedChangeRequestCount}, ` +
+            `autoApprovedCheckins=${result.autoApprovedCheckinCount}, ` +
             `groups=${result.checkedGroupCount}, timezones=${result.processedTimezoneCount}/${result.checkedTimezoneCount}.`
         );
       }

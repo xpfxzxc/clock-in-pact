@@ -1,4 +1,4 @@
-import type { ConfirmationStatus, GoalStatus } from "@prisma/client";
+import type { ConfirmationStatus, GoalStatus, MemberRole } from "@prisma/client";
 import type { GoalChangeRequestResponse } from "./goal-change-request";
 
 export interface CreateGoalRequest {
@@ -38,6 +38,7 @@ export interface GoalDetailResponse extends GoalResponse {
   participants: GoalParticipantInfo[];
   myConfirmationStatus?: ConfirmationStatus;
   isParticipant?: boolean;
+  myRole?: MemberRole;
   activeChangeRequest?: GoalChangeRequestResponse | null;
 }
 

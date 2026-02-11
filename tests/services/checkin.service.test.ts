@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CreateCheckinInput } from "../../server/types/checkin";
-import { createCheckin, listCheckins, type CheckinPrismaClient } from "../../server/services/checkin.service";
+import { createCheckin, listCheckins, reviewCheckin, type CheckinPrismaClient } from "../../server/services/checkin.service";
 import { AppError } from "../../server/utils/app-error";
 
 async function expectAppError(
@@ -560,6 +560,7 @@ describe("checkin.service listCheckins", () => {
         note: "第二条",
         status: "PENDING_REVIEW",
         evidence: [{ id: 11, filePath: "/uploads/checkins/2.jpg", fileSize: 2222 }],
+        reviews: [],
         createdByNickname: "挑战者B",
         createdAt: "2026-02-10T10:00:00.000Z",
       },
@@ -572,6 +573,7 @@ describe("checkin.service listCheckins", () => {
         note: "第一条",
         status: "CONFIRMED",
         evidence: [{ id: 10, filePath: "/uploads/checkins/1.jpg", fileSize: 1111 }],
+        reviews: [],
         createdByNickname: "挑战者A",
         createdAt: "2026-02-09T10:00:00.000Z",
       },
@@ -595,6 +597,20 @@ describe("checkin.service listCheckins", () => {
               },
             },
           },
+        },
+        reviews: {
+          include: {
+            member: {
+              include: {
+                user: {
+                  select: {
+                    nickname: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -620,5 +636,279 @@ describe("checkin.service listCheckins", () => {
     });
 
     expect(mocks.checkinFindMany).not.toHaveBeenCalled();
+  });
+});
+
+// --- reviewCheckin tests ---
+
+function createReviewPrismaMock() {
+  const checkinFindUniqueMock = vi.fn();
+  const checkinUpdateMock = vi.fn();
+  const groupMemberFindUniqueMock = vi.fn();
+  const groupMemberCountMock = vi.fn();
+  const checkinReviewFindUniqueMock = vi.fn();
+  const checkinReviewCreateMock = vi.fn();
+  const checkinReviewCountMock = vi.fn();
+
+  const prisma = {
+    checkin: {
+      findUnique: checkinFindUniqueMock,
+      update: checkinUpdateMock,
+    },
+    groupMember: {
+      findUnique: groupMemberFindUniqueMock,
+      count: groupMemberCountMock,
+    },
+    checkinReview: {
+      findUnique: checkinReviewFindUniqueMock,
+      create: checkinReviewCreateMock,
+      count: checkinReviewCountMock,
+    },
+  };
+
+  return {
+    prisma,
+    mocks: {
+      checkinFindUnique: checkinFindUniqueMock,
+      checkinUpdate: checkinUpdateMock,
+      groupMemberFindUnique: groupMemberFindUniqueMock,
+      groupMemberCount: groupMemberCountMock,
+      checkinReviewFindUnique: checkinReviewFindUniqueMock,
+      checkinReviewCreate: checkinReviewCreateMock,
+      checkinReviewCount: checkinReviewCountMock,
+    },
+  };
+}
+
+const baseCheckin = {
+  id: 1,
+  status: "PENDING_REVIEW",
+  goal: { id: 10, groupId: 1, status: "ACTIVE" },
+};
+
+describe("checkin.service reviewCheckin", () => {
+  it("成功确认（单个监督者 → 直接 CONFIRMED）", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.groupMemberCount.mockResolvedValueOnce(1);
+    mocks.checkinReviewCount.mockResolvedValueOnce(1);
+    mocks.checkinUpdate.mockResolvedValueOnce({});
+
+    const result = await reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any });
+
+    expect(result).toEqual({
+      checkinId: 1,
+      action: "CONFIRMED",
+      checkinStatus: "CONFIRMED",
+    });
+    expect(mocks.checkinUpdate).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { status: "CONFIRMED" },
+    });
+  });
+
+  it("成功确认（多个监督者，部分确认 → 仍 PENDING_REVIEW）", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.groupMemberCount.mockResolvedValueOnce(3);
+    mocks.checkinReviewCount.mockResolvedValueOnce(1);
+
+    const result = await reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any });
+
+    expect(result).toEqual({
+      checkinId: 1,
+      action: "CONFIRMED",
+      checkinStatus: "PENDING_REVIEW",
+    });
+    expect(mocks.checkinUpdate).not.toHaveBeenCalled();
+  });
+
+  it("成功确认（多个监督者，全部确认 → CONFIRMED）", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.groupMemberCount.mockResolvedValueOnce(2);
+    mocks.checkinReviewCount.mockResolvedValueOnce(2);
+    mocks.checkinUpdate.mockResolvedValueOnce({});
+
+    const result = await reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any });
+
+    expect(result).toEqual({
+      checkinId: 1,
+      action: "CONFIRMED",
+      checkinStatus: "CONFIRMED",
+    });
+    expect(mocks.checkinUpdate).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { status: "CONFIRMED" },
+    });
+  });
+
+  it("成功质疑（状态变为 DISPUTED）", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.checkinUpdate.mockResolvedValueOnce({});
+
+    const result = await reviewCheckin(1, { action: "DISPUTED", reason: "证据不充分" }, 5, { prisma: prisma as any });
+
+    expect(result).toEqual({
+      checkinId: 1,
+      action: "DISPUTED",
+      checkinStatus: "DISPUTED",
+    });
+    expect(mocks.checkinReviewCreate).toHaveBeenCalledWith({
+      data: {
+        checkinId: 1,
+        memberId: 200,
+        action: "DISPUTED",
+        reason: "证据不充分",
+      },
+    });
+    expect(mocks.checkinUpdate).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { status: "DISPUTED" },
+    });
+  });
+
+  it("质疑必须填写理由", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValue(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValue({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValue(null);
+
+    await expectAppError(
+      reviewCheckin(1, { action: "DISPUTED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "质疑必须填写理由" }
+    );
+
+    await expectAppError(
+      reviewCheckin(1, { action: "DISPUTED", reason: "   " }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "质疑必须填写理由" }
+    );
+  });
+
+  it("打卡不存在 → 404", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(null);
+
+    await expectAppError(
+      reviewCheckin(999, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 404, message: "打卡记录不存在" }
+    );
+  });
+
+  it("打卡非 PENDING_REVIEW → 400", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce({
+      ...baseCheckin,
+      status: "CONFIRMED",
+    });
+
+    await expectAppError(
+      reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "该打卡记录不在待审核状态" }
+    );
+  });
+
+  it("非监督者 → 403", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 100, role: "CHALLENGER" });
+
+    await expectAppError(
+      reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 403, message: "仅监督者可审核打卡" }
+    );
+  });
+
+  it("非小组成员 → 403", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce(null);
+
+    await expectAppError(
+      reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 403, message: "您不是该小组成员" }
+    );
+  });
+
+  it("重复审核 → 400", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce({ id: 1 });
+
+    await expectAppError(
+      reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "您已审核过该打卡记录" }
+    );
+  });
+
+  it("并发重复审核触发唯一约束时 → 400", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockRejectedValueOnce({ code: "P2002" });
+
+    await expectAppError(
+      reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "您已审核过该打卡记录" }
+    );
+  });
+
+  it("checkinId 非正整数 → 400", async () => {
+    const { prisma } = createReviewPrismaMock();
+
+    await expectAppError(
+      reviewCheckin(0, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "无效的打卡 ID" }
+    );
+
+    await expectAppError(
+      reviewCheckin(1.5, { action: "CONFIRMED" }, 5, { prisma: prisma as any }),
+      { statusCode: 400, message: "无效的打卡 ID" }
+    );
+  });
+
+  it("目标状态为 SETTLING 时仍可审核", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce({
+      ...baseCheckin,
+      goal: { id: 10, groupId: 1, status: "SETTLING" },
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.groupMemberCount.mockResolvedValueOnce(1);
+    mocks.checkinReviewCount.mockResolvedValueOnce(1);
+    mocks.checkinUpdate.mockResolvedValueOnce({});
+
+    const result = await reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any });
+
+    expect(result.checkinStatus).toBe("CONFIRMED");
   });
 });
