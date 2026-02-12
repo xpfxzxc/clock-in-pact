@@ -72,6 +72,7 @@ describeIntegration("integration US-10 监督者审核打卡", () => {
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.feedEvent.deleteMany();
     await prisma.checkinReview.deleteMany();
     await prisma.checkinEvidence.deleteMany();
     await prisma.checkin.deleteMany();

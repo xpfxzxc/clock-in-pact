@@ -2,6 +2,7 @@ import type { MemberRole, PrismaClient } from "@prisma/client";
 
 import type { CheckinEvidenceResponse, CheckinListResponse, CheckinResponse, CreateCheckinInput, ReviewCheckinInput, ReviewCheckinResponse } from "../types/checkin";
 import { AppError } from "../utils/app-error";
+import { createFeedEvent } from "./feed.service";
 
 const CHECKIN_NOTE_MAX_LENGTH = 500;
 const MIN_EVIDENCE_COUNT = 1;
@@ -197,6 +198,8 @@ async function ensureGoalAndMembership(
   goal: {
     id: number;
     groupId: number;
+    name: string;
+    unit: string;
     status: string;
     startDate: Date;
     endDate: Date;
@@ -212,6 +215,8 @@ async function ensureGoalAndMembership(
     select: {
       id: true,
       groupId: true,
+      name: true,
+      unit: true,
       status: true,
       startDate: true,
       endDate: true,
@@ -302,6 +307,24 @@ export async function createCheckin(
         fileSize: file.fileSize,
       })),
     });
+
+    await createFeedEvent(
+      {
+        eventType: "CHECKIN_SUBMITTED",
+        actorId: userId,
+        groupId: goal.groupId,
+        metadata: {
+          checkinId: createdCheckin.id,
+          checkinDate: formatDateOnly(checkinDate),
+          goalId: goal.id,
+          goalName: goal.name,
+          value: data.value,
+          unit: goal.unit,
+          evidenceCount: evidenceFiles.length,
+        },
+      },
+      { prisma: tx }
+    );
 
     const result = await tx.checkin.findUnique({
       where: { id: createdCheckin.id },
@@ -413,10 +436,28 @@ export async function reviewCheckin(
     where: { id: checkinId },
     select: {
       id: true,
+      checkinDate: true,
+      value: true,
       status: true,
+      evidence: {
+        select: {
+          id: true,
+        },
+      },
+      member: {
+        select: {
+          user: {
+            select: {
+              nickname: true,
+            },
+          },
+        },
+      },
       goal: {
         select: {
           id: true,
+          name: true,
+          unit: true,
           groupId: true,
           status: true,
         },
@@ -489,6 +530,26 @@ export async function reviewCheckin(
           reason: input.reason.trim(),
         },
       });
+
+      await createFeedEvent(
+        {
+          eventType: "REVIEW_SUBMITTED",
+          actorId: userId,
+          groupId: checkin.goal.groupId,
+          metadata: {
+            checkinId,
+            checkinDate: formatDateOnly(checkin.checkinDate),
+            goalId: checkin.goal.id,
+            goalName: checkin.goal.name,
+            checkinOwnerNickname: checkin.member.user.nickname,
+            value: decimalToNumber(checkin.value),
+            unit: checkin.goal.unit,
+            evidenceCount: (checkin.evidence ?? []).length,
+            action: input.action,
+          },
+        },
+        { prisma: deps.prisma }
+      );
     } catch (error) {
       if (isPrismaUniqueConstraintError(error)) {
         throw new AppError(400, "您已审核过该打卡记录");
@@ -517,6 +578,26 @@ export async function reviewCheckin(
         action: "CONFIRMED",
       },
     });
+
+    await createFeedEvent(
+      {
+        eventType: "REVIEW_SUBMITTED",
+        actorId: userId,
+        groupId: checkin.goal.groupId,
+        metadata: {
+          checkinId,
+          checkinDate: formatDateOnly(checkin.checkinDate),
+          goalId: checkin.goal.id,
+          goalName: checkin.goal.name,
+          checkinOwnerNickname: checkin.member.user.nickname,
+          value: decimalToNumber(checkin.value),
+          unit: checkin.goal.unit,
+          evidenceCount: (checkin.evidence ?? []).length,
+          action: input.action,
+        },
+      },
+      { prisma: deps.prisma }
+    );
   } catch (error) {
     if (isPrismaUniqueConstraintError(error)) {
       throw new AppError(400, "您已审核过该打卡记录");
@@ -543,6 +624,24 @@ export async function reviewCheckin(
       where: { id: checkinId },
       data: { status: "CONFIRMED" },
     });
+
+    await createFeedEvent(
+      {
+        eventType: "CHECKIN_CONFIRMED",
+        groupId: checkin.goal.groupId,
+        metadata: {
+          checkinId,
+          checkinDate: formatDateOnly(checkin.checkinDate),
+          checkinOwnerNickname: checkin.member.user.nickname,
+          evidenceCount: (checkin.evidence ?? []).length,
+          goalId: checkin.goal.id,
+          goalName: checkin.goal.name,
+          value: decimalToNumber(checkin.value),
+          unit: checkin.goal.unit,
+        },
+      },
+      { prisma: deps.prisma }
+    );
 
     return {
       checkinId,

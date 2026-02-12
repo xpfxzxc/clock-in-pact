@@ -40,6 +40,7 @@ function createPrismaMock() {
   const goalConfirmationCreateMock = vi.fn();
   const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
   const goalChangeVoteCreateMock = vi.fn();
+  const feedEventCreateMock = vi.fn();
 
   const transactionMock = vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
     return fn({
@@ -50,6 +51,7 @@ function createPrismaMock() {
       goalConfirmation: { create: goalConfirmationCreateMock },
       goalChangeRequest: { findMany: goalChangeRequestFindManyMock },
       goalChangeVote: { create: goalChangeVoteCreateMock },
+      feedEvent: { create: feedEventCreateMock },
     });
   });
 
@@ -77,6 +79,9 @@ function createPrismaMock() {
     goalConfirmation: {
       create: goalConfirmationCreateMock as unknown as GroupPrismaClient["goalConfirmation"]["create"],
     },
+    feedEvent: {
+      create: feedEventCreateMock as unknown as GroupPrismaClient["feedEvent"]["create"],
+    },
   };
 
   return {
@@ -95,6 +100,7 @@ function createPrismaMock() {
       goalConfirmationCreate: goalConfirmationCreateMock,
       goalChangeRequestFindMany: goalChangeRequestFindManyMock,
       goalChangeVoteCreate: goalChangeVoteCreateMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
@@ -611,6 +617,16 @@ describe("US-04 加入小组", () => {
         data: { groupId: 1, userId: 2, role: "CHALLENGER" },
       })
     );
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          groupId: 1,
+          eventType: "MEMBER_JOINED",
+          actorId: 2,
+          metadata: { role: "CHALLENGER", inviteCode: "ABC12345" },
+        }),
+      })
+    );
   });
 
   it('邀请码在事务中被抢用 → 提示"邀请码无效"', async () => {
@@ -894,8 +910,9 @@ describe("US-04 加入小组", () => {
       groupId: 1,
       userId: 2,
       role: "CHALLENGER",
+      user: { nickname: "用户2" },
     });
-    mocks.goalFindFirst.mockResolvedValueOnce({ id: 99 }); // UPCOMING/ACTIVE 目标
+    mocks.goalFindFirst.mockResolvedValueOnce({ id: 99, name: "跑步挑战" }); // UPCOMING/ACTIVE 目标
     mocks.goalParticipantCreate.mockResolvedValueOnce({ id: 1 });
     mocks.goalFindFirst.mockResolvedValueOnce(null); // 无 PENDING 目标
 
@@ -904,12 +921,26 @@ describe("US-04 加入小组", () => {
     expect(mocks.goalFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { groupId: 1, status: { in: ["UPCOMING", "ACTIVE"] } },
-        select: { id: true },
+        select: { id: true, name: true },
       })
     );
     expect(mocks.goalParticipantCreate).toHaveBeenCalledWith({
       data: { goalId: 99, memberId: 10 },
     });
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHALLENGER_AUTO_ENROLLED",
+          actorId: undefined,
+          groupId: 1,
+          metadata: {
+            goalId: 99,
+            goalName: "跑步挑战",
+            challengerNickname: "用户2",
+          },
+        }),
+      })
+    );
   });
 
   it("加入时有待开始或进行中目标（监督者）→ 不自动参与当前目标", async () => {

@@ -10,6 +10,7 @@ import type {
 import type { GoalChangeRequestResponse, GoalChangeVoteInfo, GoalProposedChanges } from "../types/goal-change-request";
 import { AppError } from "../utils/app-error";
 import { getGoalChangeRequestEffectiveExpiresAt } from "../utils/goal-change-request-deadline";
+import { createFeedEvent } from "./feed.service";
 
 const GOAL_NAME_MAX_LENGTH = 50;
 const GOAL_CATEGORY_MAX_LENGTH = 20;
@@ -365,6 +366,25 @@ export async function createGoal(
       },
     });
 
+    await createFeedEvent(
+      {
+        eventType: "GOAL_CREATED",
+        actorId: userId,
+        groupId: body.groupId,
+        metadata: { goalId: goal.id, goalName: name },
+      },
+      { prisma: tx }
+    );
+
+    await createFeedEvent(
+      {
+        eventType: "GOAL_AUTO_APPROVED",
+        groupId: body.groupId,
+        metadata: { goalId: goal.id, goalName: name },
+      },
+      { prisma: tx }
+    );
+
     await tx.goalConfirmation.createMany({
       data: members.map((m: { id: number }) => ({
         goalId: goal.id,
@@ -524,7 +544,7 @@ export async function confirmGoal(
   return deps.prisma.$transaction(async (tx: GoalPrismaTransactionClient) => {
     const goal = await tx.goal.findUnique({
       where: { id: goalId },
-      select: { id: true, groupId: true, status: true, startDate: true },
+      select: { id: true, groupId: true, status: true, startDate: true, name: true },
     });
 
     if (!goal) {
@@ -545,15 +565,56 @@ export async function confirmGoal(
     const todayDate = parseDateOnly(todayInGroup, "日期格式错误");
     const hasReachedStartDate = goal.startDate.getTime() <= todayDate.getTime();
 
+    const voidPendingRequestsAndEmit = async () => {
+      const pendingRequests = await tx.goalChangeRequest.findMany({
+        where: { goalId, status: "PENDING" },
+        select: { id: true, type: true },
+      });
+
+      await tx.goalChangeRequest.updateMany({
+        where: { goalId, status: "PENDING" },
+        data: { status: "VOIDED" },
+      });
+
+      for (const request of pendingRequests) {
+        await createFeedEvent(
+          {
+            eventType: "CHANGE_REQUEST_RESULT",
+            groupId: goal.groupId,
+            metadata: {
+              requestId: request.id,
+              goalId,
+              goalName: goal.name,
+              type: request.type,
+              result: "VOIDED",
+            },
+          },
+          { prisma: tx }
+        );
+      }
+    };
+
     if (goal.status === "PENDING" && hasReachedStartDate) {
       await tx.goal.updateMany({
         where: { id: goalId, status: "PENDING" },
         data: { status: "VOIDED" },
       });
-      await tx.goalChangeRequest.updateMany({
-        where: { goalId, status: "PENDING" },
-        data: { status: "VOIDED" },
-      });
+      await voidPendingRequestsAndEmit();
+
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId,
+            goalName: goal.name,
+            fromStatus: "PENDING",
+            toStatus: "VOIDED",
+          },
+        },
+        { prisma: tx }
+      );
+
       throw new AppError(400, "目标已作废");
     }
 
@@ -582,12 +643,38 @@ export async function confirmGoal(
       select: { status: true },
     });
 
+    await createFeedEvent(
+      {
+        eventType: "GOAL_CONFIRMED",
+        actorId: userId,
+        groupId: goal.groupId,
+        metadata: {
+          goalId,
+          goalName: goal.name,
+          status,
+        },
+      },
+      { prisma: tx }
+    );
+
     if (updatedConfirmation.status === "REJECTED") {
       await tx.goal.update({ where: { id: goalId }, data: { status: "VOIDED" }, select: { status: true } });
-      await tx.goalChangeRequest.updateMany({
-        where: { goalId, status: "PENDING" },
-        data: { status: "VOIDED" },
-      });
+      await voidPendingRequestsAndEmit();
+
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId,
+            goalName: goal.name,
+            fromStatus: "PENDING",
+            toStatus: "VOIDED",
+          },
+        },
+        { prisma: tx }
+      );
+
       return { goalId, status: updatedConfirmation.status, goalStatus: "VOIDED" };
     }
 
@@ -617,6 +704,21 @@ export async function confirmGoal(
     }
 
     await tx.goal.update({ where: { id: goalId }, data: { status: "UPCOMING" }, select: { status: true } });
+
+    await createFeedEvent(
+      {
+        eventType: "GOAL_STATUS_CHANGED",
+        groupId: goal.groupId,
+        metadata: {
+          goalId,
+          goalName: goal.name,
+          fromStatus: "PENDING",
+          toStatus: "UPCOMING",
+        },
+      },
+      { prisma: tx }
+    );
+
     await tx.goalParticipant.createMany({
       data: challengers.map((m: { id: number }) => ({ goalId, memberId: m.id })),
       skipDuplicates: true,

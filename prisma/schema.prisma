@@ -18,6 +18,7 @@ model User {
   usedInviteCodes      InviteCode[]
   createdGoals         Goal[]
   categoryCompletions  CategoryCompletion[]
+  feedEvents           FeedEvent[]
 
   @@map("users")
 }
@@ -39,6 +40,7 @@ model Group {
   inviteCodes          InviteCode[]
   goals                Goal[]
   categoryCompletions  CategoryCompletion[]
+  feedEvents           FeedEvent[]
 
   @@map("groups")
 }
@@ -118,6 +120,29 @@ enum ConfirmationStatus {
   PENDING  // 待确认
   APPROVED // 已同意
   REJECTED // 已拒绝
+}
+
+enum FeedEventType {
+  // 用户动态
+  GROUP_CREATED
+  MEMBER_JOINED
+  GOAL_CREATED
+  GOAL_CONFIRMED
+  CHANGE_REQUEST_INITIATED
+  CHANGE_REQUEST_CONFIRMED
+  CHECKIN_SUBMITTED
+  REVIEW_SUBMITTED
+  SETTLEMENT_CONFIRMED
+  // 系统动态
+  GOAL_STATUS_CHANGED
+  GOAL_AUTO_APPROVED
+  CHANGE_REQUEST_AUTO_APPROVED
+  CHALLENGER_AUTO_ENROLLED
+  GOAL_CONFIRMATION_RESET
+  CHANGE_REQUEST_RESULT
+  CHECKIN_CONFIRMED
+  CHECKIN_AUTO_APPROVED
+  SETTLEMENT_COMPLETED
 }
 
 model Goal {
@@ -267,4 +292,19 @@ model CheckinReview {
 
   @@unique([checkinId, memberId])
   @@map("checkin_reviews")
+}
+
+model FeedEvent {
+  id        Int           @id @default(autoincrement())
+  groupId   Int           @map("group_id")
+  eventType FeedEventType @map("event_type")
+  actorId   Int?          @map("actor_id")
+  metadata  Json          @default("{}")
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  group Group @relation(fields: [groupId], references: [id])
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([groupId, id(sort: Desc)])
+  @@map("feed_events")
 }

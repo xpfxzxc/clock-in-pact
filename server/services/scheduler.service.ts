@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { createFeedEvent } from "./feed.service";
 
 export type SchedulerPrismaClient =
   | PrismaClient
@@ -155,13 +156,65 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       })
     : { count: 0 };
 
+  const expiredByProposedDateRequests = reachedProposedDateRequestIds.length
+    ? await deps.prisma.goalChangeRequest.findMany({
+        where: { id: { in: reachedProposedDateRequestIds } },
+        select: {
+          id: true,
+          goalId: true,
+          type: true,
+          goal: {
+            select: {
+              name: true,
+              groupId: true,
+            },
+          },
+        },
+      })
+    : [];
+
   // 过期超时的变更请求
+  const expiredRequestsToEmit = await deps.prisma.goalChangeRequest.findMany({
+    where: { status: "PENDING", expiresAt: { lte: now } },
+    select: {
+      id: true,
+      goalId: true,
+      type: true,
+      goal: {
+        select: {
+          name: true,
+          groupId: true,
+        },
+      },
+    },
+  });
+
   const expiredRequests = await deps.prisma.goalChangeRequest.updateMany({
     where: { status: "PENDING", expiresAt: { lte: now } },
     data: { status: "EXPIRED" },
   });
 
   // 进行中目标进入待结算后：该目标下所有待确认请求自动作废
+  const voidedBySettlingToEmit = await deps.prisma.goalChangeRequest.findMany({
+    where: {
+      status: "PENDING",
+      goal: {
+        status: "SETTLING",
+      },
+    },
+    select: {
+      id: true,
+      goalId: true,
+      type: true,
+      goal: {
+        select: {
+          name: true,
+          groupId: true,
+        },
+      },
+    },
+  });
+
   const voidedBySettling = await deps.prisma.goalChangeRequest.updateMany({
     where: {
       status: "PENDING",
@@ -200,6 +253,15 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     processedTimezoneCount += 1;
 
     // UPCOMING → ACTIVE
+    const goalsToActivate = await deps.prisma.goal.findMany({
+      where: {
+        groupId: { in: groupIds },
+        status: "UPCOMING",
+        startDate: { lte: todayDate },
+      },
+      select: { id: true, name: true, groupId: true },
+    });
+
     const activated = await deps.prisma.goal.updateMany({
       where: {
         groupId: { in: groupIds },
@@ -208,6 +270,22 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       },
       data: { status: "ACTIVE" },
     });
+
+    for (const goal of goalsToActivate) {
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            fromStatus: "UPCOMING",
+            toStatus: "ACTIVE",
+          },
+        },
+        { prisma: deps.prisma }
+      );
+    }
 
     // UPCOMING→ACTIVE 后：作废含 startDate 修改的 MODIFY 请求（CANCEL 请求不受影响）
     if (activated.count > 0) {
@@ -239,16 +317,57 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
         });
 
         if (requestsWithStartDate.length > 0) {
+          const requestsWithStartDateToEmit = await deps.prisma.goalChangeRequest.findMany({
+            where: { id: { in: requestsWithStartDate.map((r: { id: number }) => r.id) }, status: "PENDING" },
+            select: {
+              id: true,
+              goalId: true,
+              type: true,
+              goal: {
+                select: {
+                  name: true,
+                  groupId: true,
+                },
+              },
+            },
+          });
+
           const voidedReqs = await deps.prisma.goalChangeRequest.updateMany({
             where: { id: { in: requestsWithStartDate.map((r: { id: number }) => r.id) } },
             data: { status: "VOIDED" },
           });
           voidedChangeRequestCount += voidedReqs.count;
+
+          for (const request of requestsWithStartDateToEmit) {
+            await createFeedEvent(
+              {
+                eventType: "CHANGE_REQUEST_RESULT",
+                groupId: request.goal.groupId,
+                metadata: {
+                  requestId: request.id,
+                  goalId: request.goalId,
+                  goalName: request.goal.name,
+                  type: request.type,
+                  result: "VOIDED",
+                },
+              },
+              { prisma: deps.prisma }
+            );
+          }
         }
       }
     }
 
     // PENDING → VOIDED
+    const goalsToVoid = await deps.prisma.goal.findMany({
+      where: {
+        groupId: { in: groupIds },
+        status: "PENDING",
+        startDate: { lte: todayDate },
+      },
+      select: { id: true, name: true, groupId: true },
+    });
+
     const voided = await deps.prisma.goal.updateMany({
       where: {
         groupId: { in: groupIds },
@@ -257,6 +376,22 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       },
       data: { status: "VOIDED" },
     });
+
+    for (const goal of goalsToVoid) {
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            fromStatus: "PENDING",
+            toStatus: "VOIDED",
+          },
+        },
+        { prisma: deps.prisma }
+      );
+    }
 
     // PENDING→VOIDED 后：作废相关请求
     if (voided.count > 0) {
@@ -271,11 +406,43 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       const voidedGoalIds = voidedGoals.map((g: { id: number }) => g.id);
 
       if (voidedGoalIds.length > 0) {
+        const voidedReqsToEmit = await deps.prisma.goalChangeRequest.findMany({
+          where: { goalId: { in: voidedGoalIds }, status: "PENDING" },
+          select: {
+            id: true,
+            goalId: true,
+            type: true,
+            goal: {
+              select: {
+                name: true,
+                groupId: true,
+              },
+            },
+          },
+        });
+
         const voidedReqs = await deps.prisma.goalChangeRequest.updateMany({
           where: { goalId: { in: voidedGoalIds }, status: "PENDING" },
           data: { status: "VOIDED" },
         });
         voidedChangeRequestCount += voidedReqs.count;
+
+        for (const request of voidedReqsToEmit) {
+          await createFeedEvent(
+            {
+              eventType: "CHANGE_REQUEST_RESULT",
+              groupId: request.goal.groupId,
+              metadata: {
+                requestId: request.id,
+                goalId: request.goalId,
+                goalName: request.goal.name,
+                type: request.type,
+                result: "VOIDED",
+              },
+            },
+            { prisma: deps.prisma }
+          );
+        }
       }
     }
 
@@ -285,6 +452,38 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
 
   // 超时3天自动通过打卡
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+  const checkinsToAutoApprove = await deps.prisma.checkin.findMany({
+    where: {
+      status: "PENDING_REVIEW",
+      createdAt: { lte: threeDaysAgo },
+    },
+    include: {
+      evidence: {
+        select: {
+          id: true,
+        },
+      },
+      member: {
+        select: {
+          user: {
+            select: {
+              nickname: true,
+            },
+          },
+        },
+      },
+      goal: {
+        select: {
+          id: true,
+          name: true,
+          unit: true,
+          groupId: true,
+        },
+      },
+    },
+  });
+
   const autoApproved = await deps.prisma.checkin.updateMany({
     where: {
       status: "PENDING_REVIEW",
@@ -292,6 +491,77 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     },
     data: { status: "AUTO_APPROVED" },
   });
+
+  for (const checkin of checkinsToAutoApprove) {
+    await createFeedEvent(
+      {
+        eventType: "CHECKIN_AUTO_APPROVED",
+        groupId: checkin.goal.groupId,
+        metadata: {
+          checkinId: checkin.id,
+          checkinDate: checkin.checkinDate.toISOString().slice(0, 10),
+          checkinOwnerNickname: checkin.member.user.nickname,
+          evidenceCount: (checkin.evidence ?? []).length,
+          goalId: checkin.goal.id,
+          goalName: checkin.goal.name,
+          value: Number(checkin.value),
+          unit: checkin.goal.unit,
+        },
+      },
+      { prisma: deps.prisma }
+    );
+  }
+
+  for (const request of expiredByProposedDateRequests) {
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_RESULT",
+        groupId: request.goal.groupId,
+        metadata: {
+          requestId: request.id,
+          goalId: request.goalId,
+          goalName: request.goal.name,
+          type: request.type,
+          result: "EXPIRED",
+        },
+      },
+      { prisma: deps.prisma }
+    );
+  }
+
+  for (const request of expiredRequestsToEmit) {
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_RESULT",
+        groupId: request.goal.groupId,
+        metadata: {
+          requestId: request.id,
+          goalId: request.goalId,
+          goalName: request.goal.name,
+          type: request.type,
+          result: "EXPIRED",
+        },
+      },
+      { prisma: deps.prisma }
+    );
+  }
+
+  for (const request of voidedBySettlingToEmit) {
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_RESULT",
+        groupId: request.goal.groupId,
+        metadata: {
+          requestId: request.id,
+          goalId: request.goalId,
+          goalName: request.goal.name,
+          type: request.type,
+          result: "VOIDED",
+        },
+      },
+      { prisma: deps.prisma }
+    );
+  }
 
   return {
     activatedCount,

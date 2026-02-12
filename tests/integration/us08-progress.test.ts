@@ -73,6 +73,7 @@ describeIntegration("integration US-08 进度查看", () => {
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.feedEvent.deleteMany();
     await prisma.checkinReview.deleteMany();
     await prisma.checkinEvidence.deleteMany();
     await prisma.checkin.deleteMany();

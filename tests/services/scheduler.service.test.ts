@@ -24,7 +24,9 @@ function createPrismaMock() {
   const goalFindManyMock = vi.fn().mockResolvedValue([]);
   const goalChangeRequestUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
   const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
+  const feedEventCreateMock = vi.fn();
   const checkinUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
+  const checkinFindManyMock = vi.fn().mockResolvedValue([]);
 
   const prisma = {
     group: {
@@ -40,6 +42,10 @@ function createPrismaMock() {
     },
     checkin: {
       updateMany: checkinUpdateManyMock,
+      findMany: checkinFindManyMock,
+    },
+    feedEvent: {
+      create: feedEventCreateMock,
     },
   };
 
@@ -52,6 +58,8 @@ function createPrismaMock() {
       goalChangeRequestUpdateMany: goalChangeRequestUpdateManyMock,
       goalChangeRequestFindMany: goalChangeRequestFindManyMock,
       checkinUpdateMany: checkinUpdateManyMock,
+      checkinFindMany: checkinFindManyMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
@@ -326,6 +334,16 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
     vi.setSystemTime(new Date("2026-02-10T12:00:00.000Z"));
 
     mocks.groupFindMany.mockResolvedValueOnce([]);
+    mocks.checkinFindMany.mockResolvedValueOnce([
+      {
+        id: 24,
+        checkinDate: new Date("2026-02-06T00:00:00.000Z"),
+        value: 1,
+        evidence: [{ id: 1 }, { id: 2 }],
+        member: { user: { nickname: "user1" } },
+        goal: { id: 20, name: "测试300次", unit: "次", groupId: 1 },
+      },
+    ]);
     mocks.checkinUpdateMany.mockResolvedValueOnce({ count: 3 });
 
     const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
@@ -341,6 +359,25 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
       },
       data: { status: "AUTO_APPROVED" },
     });
+
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHECKIN_AUTO_APPROVED",
+          groupId: 1,
+          metadata: {
+            checkinId: 24,
+            checkinDate: "2026-02-06",
+            checkinOwnerNickname: "user1",
+            evidenceCount: 2,
+            goalId: 20,
+            goalName: "测试300次",
+            value: 1,
+            unit: "次",
+          },
+        }),
+      })
+    );
   });
 });
 

@@ -9,6 +9,7 @@ import type {
   GroupMemberInfo,
 } from "../types/group";
 import { AppError } from "../utils/app-error";
+import { createFeedEvent } from "./feed.service";
 
 const GROUP_NAME_MIN_UNITS = 2;
 const GROUP_NAME_MAX_UNITS = 20;
@@ -103,7 +104,8 @@ export interface GroupPrismaClient {
     }): Promise<{ role: MemberRole } | null>;
     create(args: {
       data: { groupId: number; userId: number; role: MemberRole };
-    }): Promise<{ id: number; groupId: number; userId: number; role: MemberRole }>;
+      include?: { user: { select: { nickname: true } } };
+    }): Promise<{ id: number; groupId: number; userId: number; role: MemberRole; user?: { nickname: string } }>;
   };
   inviteCode: {
     findUnique(args: {
@@ -143,14 +145,24 @@ export interface GroupPrismaClient {
   goal: {
     findFirst(args: {
       where: { groupId: number; status: { in: ("UPCOMING" | "ACTIVE")[] } | "PENDING" };
-      select: { id: true };
-    }): Promise<{ id: number } | null>;
+      select: { id: true; name?: true };
+    }): Promise<{ id: number; name?: string } | null>;
   };
   goalParticipant: {
     create(args: { data: { goalId: number; memberId: number } }): Promise<{ id: number }>;
   };
   goalConfirmation: {
     create(args: { data: { goalId: number; memberId: number } }): Promise<{ id: number }>;
+  };
+  feedEvent: {
+    create(args: {
+      data: {
+        groupId: number;
+        eventType: string;
+        actorId?: number;
+        metadata: object;
+      };
+    }): Promise<unknown>;
   };
 }
 
@@ -169,6 +181,7 @@ export interface GroupPrismaTransactionClient {
   goalChangeVote: {
     create(args: { data: { requestId: number; memberId: number } }): Promise<{ id: number }>;
   };
+  feedEvent: Pick<GroupPrismaClient["feedEvent"], "create">;
 }
 
 type GroupCreateResult = Awaited<ReturnType<GroupPrismaClient["group"]["create"]>>;
@@ -294,6 +307,16 @@ export async function createGroup(
   if (!group) {
     throw new AppError(500, "生成邀请码失败，请重试");
   }
+
+  await createFeedEvent(
+    {
+      eventType: "GROUP_CREATED",
+      actorId: userId,
+      groupId: group.id,
+      metadata: { groupName: group.name },
+    },
+    { prisma: deps.prisma }
+  );
 
   const myMembership = group.members.find((m) => m.userId === userId);
   if (!myMembership) {
@@ -476,18 +499,44 @@ export async function joinGroup(
           userId,
           role: body.role,
         },
+        include: {
+          user: { select: { nickname: true } },
+        },
       });
+
+      await createFeedEvent(
+        {
+          eventType: "MEMBER_JOINED",
+          actorId: userId,
+          groupId: invite.groupId,
+          metadata: { role: body.role, inviteCode: invite.code },
+        },
+        { prisma: tx }
+      );
 
       if (body.role === "CHALLENGER") {
         const activeGoal = await tx.goal.findFirst({
           where: { groupId: invite.groupId, status: { in: ["UPCOMING", "ACTIVE"] } },
-          select: { id: true },
+          select: { id: true, name: true },
         });
 
         if (activeGoal) {
           await tx.goalParticipant.create({
             data: { goalId: activeGoal.id, memberId: membership.id },
           });
+
+          await createFeedEvent(
+            {
+              eventType: "CHALLENGER_AUTO_ENROLLED",
+              groupId: invite.groupId,
+              metadata: {
+                goalId: activeGoal.id,
+                goalName: activeGoal.name ?? `目标#${activeGoal.id}`,
+                challengerNickname: membership.user?.nickname ?? "新挑战者",
+              },
+            },
+            { prisma: tx }
+          );
         }
       }
 

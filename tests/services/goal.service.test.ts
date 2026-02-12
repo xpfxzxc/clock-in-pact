@@ -46,10 +46,12 @@ function createPrismaMock() {
   const goalConfirmationFindManyMock = vi.fn();
   const goalConfirmationUpdateMock = vi.fn();
   const goalChangeRequestUpdateManyMock = vi.fn().mockResolvedValue({ count: 0 });
+  const goalChangeRequestFindManyMock = vi.fn().mockResolvedValue([]);
   const goalChangeRequestFindFirstMock = vi.fn();
 
   const goalParticipantCreateManyMock = vi.fn();
   const categoryCompletionFindManyMock = vi.fn();
+  const feedEventCreateMock = vi.fn();
 
   const transactionMock = vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
     return fn({
@@ -76,6 +78,7 @@ function createPrismaMock() {
       },
       goalChangeRequest: {
         findFirst: goalChangeRequestFindFirstMock,
+        findMany: goalChangeRequestFindManyMock,
         updateMany: goalChangeRequestUpdateManyMock,
       },
       goalParticipant: {
@@ -83,6 +86,9 @@ function createPrismaMock() {
       },
       categoryCompletion: {
         findMany: categoryCompletionFindManyMock,
+      },
+      feedEvent: {
+        create: feedEventCreateMock,
       },
     });
   });
@@ -115,6 +121,7 @@ function createPrismaMock() {
     },
     goalChangeRequest: {
       findFirst: goalChangeRequestFindFirstMock as unknown as GoalPrismaClient["goalChangeRequest"]["findFirst"],
+      findMany: goalChangeRequestFindManyMock as unknown as GoalPrismaClient["goalChangeRequest"]["findMany"],
       updateMany:
         goalChangeRequestUpdateManyMock as unknown as GoalPrismaClient["goalChangeRequest"]["updateMany"],
     },
@@ -123,6 +130,9 @@ function createPrismaMock() {
     },
     categoryCompletion: {
       findMany: categoryCompletionFindManyMock as unknown as GoalPrismaClient["categoryCompletion"]["findMany"],
+    },
+    feedEvent: {
+      create: feedEventCreateMock as unknown as GoalPrismaClient["feedEvent"]["create"],
     },
   };
 
@@ -144,9 +154,11 @@ function createPrismaMock() {
       goalConfirmationFindMany: goalConfirmationFindManyMock,
       goalConfirmationUpdate: goalConfirmationUpdateMock,
       goalChangeRequestUpdateMany: goalChangeRequestUpdateManyMock,
+      goalChangeRequestFindMany: goalChangeRequestFindManyMock,
       goalChangeRequestFindFirst: goalChangeRequestFindFirstMock,
       goalParticipantCreateMany: goalParticipantCreateManyMock,
       categoryCompletionFindMany: categoryCompletionFindManyMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
@@ -238,6 +250,16 @@ describe("goal.service createGoal", () => {
         { goalId: 10, memberId: 2, status: "PENDING" },
       ],
     });
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "GOAL_AUTO_APPROVED",
+          actorId: undefined,
+          groupId: 1,
+          metadata: { goalId: 10, goalName: "跑步挑战" },
+        }),
+      })
+    );
   });
 
   it("开始日期是当天或过去 → 提示错误", async () => {
@@ -545,9 +567,13 @@ describe("goal.service confirmGoal", () => {
       groupId: 1,
       status: "PENDING",
       startDate: new Date(Date.UTC(2026, 1, 5)),
+      name: "测试目标",
     });
     mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 100 });
     mocks.goalUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.goalChangeRequestFindMany.mockResolvedValueOnce([
+      { id: 21, type: "MODIFY" },
+    ]);
 
     await expectAppError(confirmGoal(10, 1, "APPROVED", { prisma }), {
       statusCode: 400,
@@ -558,10 +584,29 @@ describe("goal.service confirmGoal", () => {
       where: { id: 10, status: "PENDING" },
       data: { status: "VOIDED" },
     });
+    expect(mocks.goalChangeRequestFindMany).toHaveBeenCalledWith({
+      where: { goalId: 10, status: "PENDING" },
+      select: { id: true, type: true },
+    });
     expect(mocks.goalChangeRequestUpdateMany).toHaveBeenCalledWith({
       where: { goalId: 10, status: "PENDING" },
       data: { status: "VOIDED" },
     });
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHANGE_REQUEST_RESULT",
+          groupId: 1,
+          metadata: {
+            requestId: 21,
+            goalId: 10,
+            goalName: "测试目标",
+            type: "MODIFY",
+            result: "VOIDED",
+          },
+        }),
+      })
+    );
     expect(mocks.goalConfirmationFindUnique).not.toHaveBeenCalled();
     expect(mocks.goalConfirmationUpdate).not.toHaveBeenCalled();
   });

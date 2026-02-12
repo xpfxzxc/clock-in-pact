@@ -10,6 +10,7 @@ import type {
 } from "../types/goal-change-request";
 import { AppError } from "../utils/app-error";
 import { getGoalChangeRequestEffectiveExpiresAt } from "../utils/goal-change-request-deadline";
+import { createFeedEvent } from "./feed.service";
 
 const GOAL_NAME_MAX_LENGTH = 50;
 const GOAL_CATEGORY_MAX_LENGTH = 20;
@@ -238,10 +239,27 @@ async function applyGoalChangeRequest(
   }
 
   if (request.type === "CANCEL") {
+    const previousStatus = goal.status;
+
     await tx.goal.update({
       where: { id: goal.id },
       data: { status: "CANCELLED" },
     });
+
+    await createFeedEvent(
+      {
+        eventType: "GOAL_STATUS_CHANGED",
+        groupId: goal.groupId,
+        metadata: {
+          goalId: goal.id,
+          goalName: goal.name,
+          fromStatus: previousStatus,
+          toStatus: "CANCELLED",
+        },
+      },
+      { prisma: tx }
+    );
+
     // TODO: 已有打卡记录保留，标记为"已取消目标的记录"，不计入成绩（US-07 之后实现）
   } else {
     // MODIFY
@@ -279,12 +297,26 @@ async function applyGoalChangeRequest(
           status: "PENDING" as const,
         })),
       });
+
+      await createFeedEvent(
+        {
+          eventType: "GOAL_CONFIRMATION_RESET",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            requestId: request.id,
+          },
+        },
+        { prisma: tx }
+      );
     } else if (goal.status === "UPCOMING") {
       // 状态回退为 PENDING
       await tx.goal.update({
         where: { id: goal.id },
         data: { status: "PENDING" },
       });
+
       // 删除所有确认，重新为全员创建
       await tx.goalConfirmation.deleteMany({ where: { goalId: goal.id } });
       const members = await tx.groupMember.findMany({
@@ -298,6 +330,34 @@ async function applyGoalChangeRequest(
           status: "PENDING" as const,
         })),
       });
+
+      await createFeedEvent(
+        {
+          eventType: "GOAL_CONFIRMATION_RESET",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            requestId: request.id,
+          },
+        },
+        { prisma: tx }
+      );
+
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            fromStatus: "UPCOMING",
+            toStatus: "PENDING",
+          },
+        },
+        { prisma: tx }
+      );
+
       // 删除所有参与者
       await tx.goalParticipant.deleteMany({ where: { goalId: goal.id } });
     }
@@ -327,6 +387,7 @@ export async function createGoalChangeRequest(
       select: {
         id: true,
         groupId: true,
+        name: true,
         status: true,
         startDate: true,
         endDate: true,
@@ -492,6 +553,35 @@ export async function createGoalChangeRequest(
       },
     });
 
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_INITIATED",
+        actorId: userId,
+        groupId: goal.groupId,
+        metadata: {
+          requestId: changeRequest.id,
+          goalId: body.goalId,
+          goalName: goal.name,
+          type: body.type,
+        },
+      },
+      { prisma: tx }
+    );
+
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_AUTO_APPROVED",
+        groupId: goal.groupId,
+        metadata: {
+          requestId: changeRequest.id,
+          goalId: body.goalId,
+          goalName: goal.name,
+          type: body.type,
+        },
+      },
+      { prisma: tx }
+    );
+
     const members = await tx.groupMember.findMany({
       where: { groupId: goal.groupId },
       select: { id: true },
@@ -507,6 +597,21 @@ export async function createGoalChangeRequest(
 
     // 若发起人自动同意后已全员通过（如单人小组）
     if (members.length === 1) {
+      await createFeedEvent(
+        {
+          eventType: "CHANGE_REQUEST_RESULT",
+          groupId: goal.groupId,
+          metadata: {
+            requestId: changeRequest.id,
+            goalId: body.goalId,
+            goalName: goal.name,
+            type: body.type,
+            result: "APPROVED",
+          },
+        },
+        { prisma: tx }
+      );
+
       await applyGoalChangeRequest(changeRequest, tx);
     }
 
@@ -544,9 +649,17 @@ export async function voteGoalChangeRequest(
   return deps.prisma.$transaction(async (tx: GoalChangeRequestTransactionClient) => {
     const request = await tx.goalChangeRequest.findUnique({
       where: { id: requestId },
-      include: {
+      select: {
+        id: true,
+        goalId: true,
+        type: true,
+        status: true,
+        expiresAt: true,
+        proposedChanges: true,
         goal: {
           select: {
+            id: true,
+            name: true,
             groupId: true,
             group: { select: { timezone: true } },
           },
@@ -595,10 +708,42 @@ export async function voteGoalChangeRequest(
     });
 
     if (status === "REJECTED") {
+      await createFeedEvent(
+        {
+          eventType: "CHANGE_REQUEST_CONFIRMED",
+          actorId: userId,
+          groupId: request.goal.groupId,
+          metadata: {
+            requestId,
+            goalId: request.goalId,
+            goalName: request.goal.name,
+            type: request.type,
+            status,
+          },
+        },
+        { prisma: tx }
+      );
+
       await tx.goalChangeRequest.update({
         where: { id: requestId },
         data: { status: "REJECTED" },
       });
+
+      await createFeedEvent(
+        {
+          eventType: "CHANGE_REQUEST_RESULT",
+          groupId: request.goal.groupId,
+          metadata: {
+            requestId,
+            goalId: request.goalId,
+            goalName: request.goal.name,
+            type: request.type,
+            result: "REJECTED",
+          },
+        },
+        { prisma: tx }
+      );
+
       return {
         requestId,
         voteStatus: status as ConfirmationStatus,
@@ -624,13 +769,61 @@ export async function voteGoalChangeRequest(
     });
 
     if (allCurrentApproved) {
+      await createFeedEvent(
+        {
+          eventType: "CHANGE_REQUEST_CONFIRMED",
+          actorId: userId,
+          groupId: request.goal.groupId,
+          metadata: {
+            requestId,
+            goalId: request.goalId,
+            goalName: request.goal.name,
+            type: request.type,
+            status,
+          },
+        },
+        { prisma: tx }
+      );
+
+      await createFeedEvent(
+        {
+          eventType: "CHANGE_REQUEST_RESULT",
+          groupId: request.goal.groupId,
+          metadata: {
+            requestId,
+            goalId: request.goalId,
+            goalName: request.goal.name,
+            type: request.type,
+            result: "APPROVED",
+          },
+        },
+        { prisma: tx }
+      );
+
       await applyGoalChangeRequest(request, tx);
+
       return {
         requestId,
         voteStatus: status as ConfirmationStatus,
         requestStatus: "APPROVED" as GoalChangeRequestStatus,
       };
     }
+
+    await createFeedEvent(
+      {
+        eventType: "CHANGE_REQUEST_CONFIRMED",
+        actorId: userId,
+        groupId: request.goal.groupId,
+        metadata: {
+          requestId,
+          goalId: request.goalId,
+          goalName: request.goal.name,
+          type: request.type,
+          status,
+        },
+      },
+      { prisma: tx }
+    );
 
     return {
       requestId,

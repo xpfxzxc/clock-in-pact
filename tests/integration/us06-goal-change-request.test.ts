@@ -82,6 +82,7 @@ describeIntegration("integration US-06 目标修改/取消请求", () => {
 
   beforeEach(async () => {
     if (!prisma) return;
+    await prisma.feedEvent.deleteMany();
     await prisma.checkinReview.deleteMany();
     await prisma.checkinEvidence.deleteMany();
     await prisma.checkin.deleteMany();

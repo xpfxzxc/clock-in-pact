@@ -29,6 +29,7 @@ function createPrismaMock() {
   const checkinFindUniqueMock = vi.fn();
   const checkinFindManyMock = vi.fn();
   const checkinEvidenceCreateManyMock = vi.fn();
+  const feedEventCreateMock = vi.fn();
 
   const transactionMock = vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
     return fn({
@@ -38,6 +39,9 @@ function createPrismaMock() {
       },
       checkinEvidence: {
         createMany: checkinEvidenceCreateManyMock,
+      },
+      feedEvent: {
+        create: feedEventCreateMock,
       },
     });
   });
@@ -61,6 +65,9 @@ function createPrismaMock() {
     checkinEvidence: {
       createMany: checkinEvidenceCreateManyMock as unknown as CheckinPrismaClient["checkinEvidence"]["createMany"],
     },
+    feedEvent: {
+      create: feedEventCreateMock as unknown as CheckinPrismaClient["feedEvent"]["create"],
+    },
   };
 
   return {
@@ -74,6 +81,7 @@ function createPrismaMock() {
       checkinFindUnique: checkinFindUniqueMock,
       checkinFindMany: checkinFindManyMock,
       checkinEvidenceCreateMany: checkinEvidenceCreateManyMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
@@ -104,6 +112,8 @@ describe("checkin.service createCheckin", () => {
     const goal = {
       id: 10,
       groupId: 1,
+      name: "测试目标",
+      unit: "公里",
       status: "ACTIVE",
       startDate: new Date(Date.UTC(2026, 1, 8)),
       endDate: new Date(Date.UTC(2026, 1, 28)),
@@ -173,6 +183,46 @@ describe("checkin.service createCheckin", () => {
     expect(mocks.checkinEvidenceCreateMany).toHaveBeenNthCalledWith(2, {
       data: [{ checkinId: 502, filePath: "/uploads/checkins/b.jpg", fileSize: 1500 }],
     });
+
+    expect(mocks.feedEventCreate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHECKIN_SUBMITTED",
+          actorId: 1,
+          groupId: 1,
+          metadata: {
+            checkinId: 501,
+            checkinDate: "2026-02-10",
+            goalId: 10,
+            goalName: "测试目标",
+            value: 3.5,
+            unit: "公里",
+            evidenceCount: 1,
+          },
+        }),
+      })
+    );
+
+    expect(mocks.feedEventCreate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHECKIN_SUBMITTED",
+          actorId: 1,
+          groupId: 1,
+          metadata: {
+            checkinId: 502,
+            checkinDate: "2026-02-09",
+            goalId: 10,
+            goalName: "测试目标",
+            value: 2.25,
+            unit: "公里",
+            evidenceCount: 1,
+          },
+        }),
+      })
+    );
   });
 
   it("同一天可打多次卡", async () => {
@@ -182,6 +232,8 @@ describe("checkin.service createCheckin", () => {
     const goal = {
       id: 10,
       groupId: 1,
+      name: "测试目标",
+      unit: "公里",
       status: "ACTIVE",
       startDate: new Date(Date.UTC(2026, 1, 8)),
       endDate: new Date(Date.UTC(2026, 1, 28)),
@@ -649,6 +701,7 @@ function createReviewPrismaMock() {
   const checkinReviewFindUniqueMock = vi.fn();
   const checkinReviewCreateMock = vi.fn();
   const checkinReviewCountMock = vi.fn();
+  const feedEventCreateMock = vi.fn();
 
   const prisma = {
     checkin: {
@@ -664,6 +717,9 @@ function createReviewPrismaMock() {
       create: checkinReviewCreateMock,
       count: checkinReviewCountMock,
     },
+    feedEvent: {
+      create: feedEventCreateMock,
+    },
   };
 
   return {
@@ -676,14 +732,19 @@ function createReviewPrismaMock() {
       checkinReviewFindUnique: checkinReviewFindUniqueMock,
       checkinReviewCreate: checkinReviewCreateMock,
       checkinReviewCount: checkinReviewCountMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
 
 const baseCheckin = {
   id: 1,
+  checkinDate: new Date(Date.UTC(2026, 1, 10)),
+  value: { toNumber: () => 3.5 },
   status: "PENDING_REVIEW",
-  goal: { id: 10, groupId: 1, status: "ACTIVE" },
+  evidence: [{ id: 11 }],
+  member: { user: { nickname: "用户1" } },
+  goal: { id: 10, name: "跑步", unit: "公里", groupId: 1, status: "ACTIVE" },
 };
 
 describe("checkin.service reviewCheckin", () => {
@@ -753,6 +814,23 @@ describe("checkin.service reviewCheckin", () => {
       where: { id: 1 },
       data: { status: "CONFIRMED" },
     });
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "CHECKIN_CONFIRMED",
+          metadata: expect.objectContaining({
+            checkinId: 1,
+            checkinDate: "2026-02-10",
+            checkinOwnerNickname: "用户1",
+            evidenceCount: 1,
+            goalId: 10,
+            goalName: "跑步",
+            value: 3.5,
+            unit: "公里",
+          }),
+        }),
+      })
+    );
   });
 
   it("成功质疑（状态变为 DISPUTED）", async () => {
@@ -783,6 +861,38 @@ describe("checkin.service reviewCheckin", () => {
       where: { id: 1 },
       data: { status: "DISPUTED" },
     });
+  });
+
+  it("审核动态包含被审核人昵称", async () => {
+    const { prisma, mocks } = createReviewPrismaMock();
+
+    mocks.checkinFindUnique.mockResolvedValueOnce(baseCheckin);
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
+    mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);
+    mocks.checkinReviewCreate.mockResolvedValueOnce({});
+    mocks.groupMemberCount.mockResolvedValueOnce(3);
+    mocks.checkinReviewCount.mockResolvedValueOnce(1);
+
+    await reviewCheckin(1, { action: "CONFIRMED" }, 5, { prisma: prisma as any });
+
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "REVIEW_SUBMITTED",
+          metadata: expect.objectContaining({
+            checkinId: 1,
+            checkinDate: "2026-02-10",
+            goalId: 10,
+            goalName: "跑步",
+            checkinOwnerNickname: "用户1",
+            value: 3.5,
+            unit: "公里",
+            evidenceCount: 1,
+            action: "CONFIRMED",
+          }),
+        }),
+      })
+    );
   });
 
   it("质疑必须填写理由", async () => {
@@ -898,7 +1008,7 @@ describe("checkin.service reviewCheckin", () => {
 
     mocks.checkinFindUnique.mockResolvedValueOnce({
       ...baseCheckin,
-      goal: { id: 10, groupId: 1, status: "SETTLING" },
+      goal: { id: 10, name: "跑步", unit: "公里", groupId: 1, status: "SETTLING" },
     });
     mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 200, role: "SUPERVISOR" });
     mocks.checkinReviewFindUnique.mockResolvedValueOnce(null);

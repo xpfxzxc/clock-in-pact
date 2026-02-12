@@ -47,6 +47,7 @@ function createPrismaMock() {
   const goalConfirmationDeleteManyMock = vi.fn();
   const goalConfirmationCreateManyMock = vi.fn();
   const goalParticipantDeleteManyMock = vi.fn();
+  const feedEventCreateMock = vi.fn();
 
   const categoryCompletionFindManyMock = vi.fn().mockResolvedValue([]);
 
@@ -88,6 +89,9 @@ function createPrismaMock() {
       categoryCompletion: {
         findMany: categoryCompletionFindManyMock,
       },
+      feedEvent: {
+        create: feedEventCreateMock,
+      },
     });
   });
 
@@ -100,6 +104,9 @@ function createPrismaMock() {
       findMany: goalChangeRequestFindManyMock as any,
       findUnique: goalChangeRequestFindUniqueMock as any,
       updateMany: goalChangeRequestUpdateManyMock as any,
+    },
+    feedEvent: {
+      create: feedEventCreateMock as any,
     },
   };
 
@@ -127,6 +134,7 @@ function createPrismaMock() {
       goalConfirmationCreateMany: goalConfirmationCreateManyMock,
       goalParticipantDeleteMany: goalParticipantDeleteManyMock,
       categoryCompletionFindMany: categoryCompletionFindManyMock,
+      feedEventCreate: feedEventCreateMock,
     },
   };
 }
@@ -164,7 +172,7 @@ function makeChangeRequest(overrides: Record<string, unknown> = {}) {
     createdAt: NOW,
     updatedAt: NOW,
     initiator: { id: 1, userId: 1, user: { nickname: "用户A" } },
-    goal: { groupId: 10, group: { timezone: "Asia/Shanghai" } },
+    goal: { id: 1, name: "跑步", groupId: 10, group: { timezone: "Asia/Shanghai" } },
     votes: [
       {
         memberId: 1,
@@ -231,6 +239,21 @@ describe("goal-change-request.service", () => {
       const initiatorVote = result.votes.find((v) => v.userId === 1);
       expect(initiatorVote?.status).toBe("APPROVED");
       expect(ctx.mocks.goalChangeVoteCreateMany).toHaveBeenCalled();
+      expect(ctx.mocks.feedEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "CHANGE_REQUEST_AUTO_APPROVED",
+            actorId: undefined,
+            groupId: 10,
+            metadata: {
+              requestId: 100,
+              goalId: 1,
+              goalName: "跑步",
+              type: "MODIFY",
+            },
+          }),
+        })
+      );
     });
 
     it("成功创建 CANCEL 请求", async () => {
@@ -260,6 +283,64 @@ describe("goal-change-request.service", () => {
       );
 
       expect(result.type).toBe("CANCEL");
+    });
+
+    it("单成员小组自动通过时，写入 CHANGE_REQUEST_RESULT(APPROVED) 动态", async () => {
+      const goal = makeGoal();
+      ctx.mocks.goalFindUnique.mockResolvedValue(goal);
+      ctx.mocks.groupMemberFindUnique.mockResolvedValue({ id: 1 });
+      ctx.mocks.goalChangeRequestFindFirst.mockResolvedValue(null);
+      ctx.mocks.groupMemberFindMany.mockResolvedValue([{ id: 1 }]);
+      ctx.mocks.goalChangeRequestCreate.mockResolvedValue({
+        id: 102,
+        goalId: 1,
+        type: "CANCEL",
+        status: "PENDING",
+        initiatorId: 1,
+        proposedChanges: null,
+        expiresAt: new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
+        createdAt: NOW,
+      });
+      ctx.mocks.goalChangeRequestFindUnique.mockResolvedValue(
+        makeChangeRequest({
+          id: 102,
+          type: "CANCEL",
+          status: "APPROVED",
+          proposedChanges: null,
+          votes: [
+            {
+              memberId: 1,
+              status: "APPROVED",
+              updatedAt: NOW,
+              member: { userId: 1, role: "SUPERVISOR", user: { nickname: "用户A" } },
+            },
+          ],
+        })
+      );
+
+      const result = await createGoalChangeRequest(
+        { goalId: 1, type: "CANCEL" },
+        1,
+        { prisma: ctx.prisma, now: () => NOW }
+      );
+
+      expect(result.type).toBe("CANCEL");
+      expect(ctx.mocks.feedEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "CHANGE_REQUEST_RESULT",
+            actorId: undefined,
+            groupId: 10,
+            metadata: {
+              requestId: 102,
+              goalId: 1,
+              goalName: "跑步",
+              type: "CANCEL",
+              result: "APPROVED",
+            },
+          }),
+        })
+      );
     });
 
     it("已有 PENDING 请求时不可发起新请求", async () => {
@@ -489,6 +570,22 @@ describe("goal-change-request.service", () => {
 
       expect(result.requestStatus).toBe("PENDING");
       expect(result.voteStatus).toBe("APPROVED");
+      expect(ctx.mocks.feedEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "CHANGE_REQUEST_CONFIRMED",
+            actorId: 2,
+            groupId: 10,
+            metadata: {
+              requestId: 100,
+              goalId: 1,
+              goalName: "跑步",
+              type: "MODIFY",
+              status: "APPROVED",
+            },
+          }),
+        })
+      );
     });
 
     it("全员通过 MODIFY（PENDING 目标）→ 确认重置", async () => {
@@ -588,6 +685,22 @@ describe("goal-change-request.service", () => {
 
       expect(result.requestStatus).toBe("REJECTED");
       expect(result.voteStatus).toBe("REJECTED");
+      expect(ctx.mocks.feedEventCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "CHANGE_REQUEST_CONFIRMED",
+            actorId: 2,
+            groupId: 10,
+            metadata: {
+              requestId: 100,
+              goalId: 1,
+              goalName: "跑步",
+              type: "MODIFY",
+              status: "REJECTED",
+            },
+          }),
+        })
+      );
     });
 
     it("过期请求不可投票", async () => {
