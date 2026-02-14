@@ -255,8 +255,8 @@ export async function getProgress(
     throw new AppError(404, "目标不存在");
   }
 
-  if (goal.status !== "ACTIVE") {
-    throw new AppError(400, "仅进行中的目标可查看进度");
+  if (goal.status !== "ACTIVE" && goal.status !== "SETTLING" && goal.status !== "ARCHIVED") {
+    throw new AppError(400, "仅进行中、待结算或已归档的目标可查看进度");
   }
 
   const membership = await deps.prisma.groupMember.findUnique({
@@ -399,7 +399,9 @@ export async function getProgress(
       endDate: formatDateOnly(goal.endDate),
       status: goal.status,
     },
-    remainingDays: calculateRemainingDays(goal.endDate, goal.group.timezone),
+    remainingDays: goal.status === "SETTLING" || goal.status === "ARCHIVED"
+      ? 0
+      : calculateRemainingDays(goal.endDate, goal.group.timezone),
     totalPendingReviewCount,
     totalDisputedCount,
     myRole: membership.role,

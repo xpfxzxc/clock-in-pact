@@ -130,6 +130,16 @@ export interface SettlementCompletedMeta {
   goalName: string;
 }
 
+export interface DurationUnlockedMeta {
+  goalId: number;
+  goalName: string;
+  userId: number;
+  challengerNickname: string;
+  category: string;
+  fromMaxMonths: number;
+  toMaxMonths: number;
+}
+
 // ── Union type for all metadata ──
 
 export type FeedEventMeta =
@@ -150,7 +160,8 @@ export type FeedEventMeta =
   | ChangeRequestResultMeta
   | CheckinConfirmedMeta
   | CheckinAutoApprovedMeta
-  | SettlementCompletedMeta;
+  | SettlementCompletedMeta
+  | DurationUnlockedMeta;
 
 // ── API types ──
 

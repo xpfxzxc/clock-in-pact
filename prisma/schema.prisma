@@ -62,6 +62,7 @@ model GroupMember {
   goalChangeVotes    GoalChangeVote[]
   checkins           Checkin[]
   checkinReviews     CheckinReview[]
+  settlementConfirmations SettlementConfirmation[]
 
   @@unique([groupId, userId])
   @@map("group_members")
@@ -143,6 +144,7 @@ enum FeedEventType {
   CHECKIN_CONFIRMED
   CHECKIN_AUTO_APPROVED
   SETTLEMENT_COMPLETED
+  DURATION_UNLOCKED
 }
 
 model Goal {
@@ -167,6 +169,7 @@ model Goal {
   participants  GoalParticipant[]
   changeRequests GoalChangeRequest[]
   checkins      Checkin[]
+  settlementConfirmations SettlementConfirmation[]
 
   @@map("goals")
 }
@@ -292,6 +295,19 @@ model CheckinReview {
 
   @@unique([checkinId, memberId])
   @@map("checkin_reviews")
+}
+
+model SettlementConfirmation {
+  id        Int      @id @default(autoincrement())
+  goalId    Int      @map("goal_id")
+  memberId  Int      @map("member_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  goal   Goal        @relation(fields: [goalId], references: [id])
+  member GroupMember @relation(fields: [memberId], references: [id])
+
+  @@unique([goalId, memberId])
+  @@map("settlement_confirmations")
 }
 
 model FeedEvent {

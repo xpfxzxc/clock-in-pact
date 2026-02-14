@@ -96,6 +96,7 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
 
     expect(result).toMatchObject({
       activatedCount: 2,
+      settlingCount: 0,
       voidedCount: 1,
       checkedGroupCount: 2,
       checkedTimezoneCount: 1,
@@ -108,14 +109,22 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
       where: {
         goals: {
           some: {
-            status: { in: ["PENDING", "UPCOMING"] },
+            OR: [
+              {
+                status: { in: ["PENDING", "UPCOMING"] },
+              },
+              {
+                status: "ACTIVE",
+              },
+            ],
           },
         },
       },
     });
-    expect(findManyArgs.where.goals.some.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
+    expect(findManyArgs.where.goals.some.OR[0].startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
+    expect(findManyArgs.where.goals.some.OR[1].endDate.lt).toEqual(new Date(Date.UTC(2026, 1, 6)));
 
-    expect(mocks.goalUpdateMany).toHaveBeenCalledTimes(2);
+    expect(mocks.goalUpdateMany).toHaveBeenCalledTimes(3);
 
     const activateArgs = mocks.goalUpdateMany.mock.calls[0]?.[0] as any;
     expect(activateArgs).toMatchObject({
@@ -127,7 +136,17 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
     });
     expect(activateArgs.where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
 
-    const voidArgs = mocks.goalUpdateMany.mock.calls[1]?.[0] as any;
+    const settlingArgs = mocks.goalUpdateMany.mock.calls[1]?.[0] as any;
+    expect(settlingArgs).toMatchObject({
+      where: {
+        groupId: { in: [1, 2] },
+        status: "ACTIVE",
+      },
+      data: { status: "SETTLING" },
+    });
+    expect(settlingArgs.where.endDate.lt).toEqual(new Date(Date.UTC(2026, 1, 6)));
+
+    const voidArgs = mocks.goalUpdateMany.mock.calls[2]?.[0] as any;
     expect(voidArgs).toMatchObject({
       where: {
         groupId: { in: [1, 2] },
@@ -150,7 +169,7 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
     await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
 
     const calls = mocks.goalUpdateMany.mock.calls.map((call) => call[0] as any);
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(6);
 
     // Asia/Shanghai uses "2026-02-06"
     expect(calls[0]).toMatchObject({
@@ -160,23 +179,84 @@ describe("scheduler.service runGoalStatusSchedulerTick", () => {
     expect(calls[0].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
 
     expect(calls[1]).toMatchObject({
+      where: { groupId: { in: [1] }, status: "ACTIVE" },
+      data: { status: "SETTLING" },
+    });
+    expect(calls[1].where.endDate.lt).toEqual(new Date(Date.UTC(2026, 1, 6)));
+
+    expect(calls[2]).toMatchObject({
       where: { groupId: { in: [1] }, status: "PENDING" },
       data: { status: "VOIDED" },
     });
-    expect(calls[1].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
+    expect(calls[2].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 6)));
 
     // America/Los_Angeles uses "2026-02-05"
-    expect(calls[2]).toMatchObject({
+    expect(calls[3]).toMatchObject({
       where: { groupId: { in: [2] }, status: "UPCOMING" },
       data: { status: "ACTIVE" },
     });
-    expect(calls[2].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 5)));
+    expect(calls[3].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 5)));
 
-    expect(calls[3]).toMatchObject({
+    expect(calls[4]).toMatchObject({
+      where: { groupId: { in: [2] }, status: "ACTIVE" },
+      data: { status: "SETTLING" },
+    });
+    expect(calls[4].where.endDate.lt).toEqual(new Date(Date.UTC(2026, 1, 5)));
+
+    expect(calls[5]).toMatchObject({
       where: { groupId: { in: [2] }, status: "PENDING" },
       data: { status: "VOIDED" },
     });
-    expect(calls[3].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 5)));
+    expect(calls[5].where.startDate.lte).toEqual(new Date(Date.UTC(2026, 1, 5)));
+  });
+
+  it("ACTIVE 目标在 endDate 次日（小组时区）自动进入 SETTLING", async () => {
+    const { prisma, mocks } = createPrismaMock();
+    vi.setSystemTime(new Date("2026-02-05T16:00:00.000Z")); // Asia/Shanghai = 2026-02-06 00:00:00
+
+    mocks.groupFindMany.mockResolvedValueOnce([{ id: 1, timezone: "Asia/Shanghai" }]);
+    mocks.goalFindMany.mockImplementation(async (args: any) => {
+      if (args?.where?.status === "ACTIVE") {
+        return [{ id: 88, name: "跑步挑战", groupId: 1 }];
+      }
+      return [];
+    });
+    mocks.goalUpdateMany.mockImplementation(async (args: any) => {
+      if (args?.data?.status === "SETTLING") return { count: 1 };
+      return { count: 0 };
+    });
+
+    const result = await runGoalStatusSchedulerTick({ prisma: prisma as any, logger: { error: vi.fn() } });
+
+    expect(result).toMatchObject({
+      activatedCount: 0,
+      settlingCount: 1,
+      voidedCount: 0,
+    });
+
+    expect(mocks.goalUpdateMany).toHaveBeenCalledWith({
+      where: {
+        groupId: { in: [1] },
+        status: "ACTIVE",
+        endDate: { lt: new Date(Date.UTC(2026, 1, 6)) },
+      },
+      data: { status: "SETTLING" },
+    });
+
+    expect(mocks.feedEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: 1,
+          metadata: {
+            goalId: 88,
+            goalName: "跑步挑战",
+            fromStatus: "ACTIVE",
+            toStatus: "SETTLING",
+          },
+        }),
+      })
+    );
   });
 
   it("遇到非法时区不应中断任务（跳过该时区的小组）", async () => {

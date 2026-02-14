@@ -7,6 +7,7 @@ import { Pool } from "pg";
 
 import { createGroup, joinGroup, type GroupPrismaClient } from "../../server/services/group.service";
 import { confirmGoal, createGoal, type GoalPrismaClient } from "../../server/services/goal.service";
+import { createCheckin, reviewCheckin, type CheckinPrismaClient } from "../../server/services/checkin.service";
 import {
   createGoalChangeRequest,
   voteGoalChangeRequest,
@@ -14,6 +15,7 @@ import {
 } from "../../server/services/goal-change-request.service";
 import { getFeedEvents, type FeedPrismaClient } from "../../server/services/feed.service";
 import { runGoalStatusSchedulerTick } from "../../server/services/scheduler.service";
+import { confirmSettlement, type SettlementPrismaClient } from "../../server/services/settlement.service";
 
 function getDatabaseName(databaseUrl: string): string {
   const url = new URL(databaseUrl);
@@ -42,7 +44,7 @@ async function createUser(prisma: PrismaClient, username: string) {
 
 const describeIntegration = process.env.INTEGRATION_TEST === "1" ? describe : describe.skip;
 
-describeIntegration("integration US-09 新增动态场景（16/17/18/19）", () => {
+describeIntegration("integration US-09 新增动态场景（16/17/18/19/20）", () => {
   let prisma: PrismaClient | undefined;
   let pool: Pool | undefined;
 
@@ -69,6 +71,7 @@ describeIntegration("integration US-09 新增动态场景（16/17/18/19）", () 
     await prisma.checkinReview.deleteMany();
     await prisma.checkinEvidence.deleteMany();
     await prisma.checkin.deleteMany();
+    await prisma.settlementConfirmation.deleteMany();
     await prisma.goalChangeVote.deleteMany();
     await prisma.goalChangeRequest.deleteMany();
     await prisma.goalParticipant.deleteMany();
@@ -546,6 +549,93 @@ describeIntegration("integration US-09 新增动态场景（16/17/18/19）", () 
       goalName: "测试1333次",
       type: "MODIFY",
       result: "VOIDED",
+    });
+  });
+
+  it("场景20: 结算完成后可看到时长阶梯解锁动态", async () => {
+    if (!prisma) throw new Error("Prisma not initialized");
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T12:00:00.000Z"));
+
+    const suffix = randomBytes(6).toString("hex");
+    const [supervisor, challenger] = await Promise.all([
+      createUser(prisma, `su20_${suffix}`),
+      createUser(prisma, `ch20_${suffix}`),
+    ]);
+
+    const group = await createGroup({ name: "US09-20小组", role: "SUPERVISOR", timezone: "Asia/Shanghai" }, supervisor.id, {
+      prisma: prisma as unknown as GroupPrismaClient,
+    });
+
+    await joinGroup({ inviteCode: group.inviteCodes[0]!, role: "CHALLENGER" }, challenger.id, {
+      prisma: prisma as unknown as GroupPrismaClient,
+    });
+
+    const goal = await createGoal(
+      {
+        groupId: group.id,
+        name: "跑步阶梯解锁",
+        category: "跑步",
+        targetValue: 10,
+        unit: "km",
+        startDate: "2026-02-10",
+        endDate: "2026-02-11",
+        rewardPunishment: "失败者请成功者吃饭",
+        evidenceRequirement: "截图",
+      },
+      supervisor.id,
+      { prisma: prisma as unknown as GoalPrismaClient }
+    );
+
+    await confirmGoal(goal.id, challenger.id, "APPROVED", {
+      prisma: prisma as unknown as GoalPrismaClient,
+    });
+
+    const activateTime = new Date("2026-02-09T16:00:00.000Z"); // Asia/Shanghai = 2026-02-10 00:00
+    vi.setSystemTime(activateTime);
+    await runGoalStatusSchedulerTick({ prisma, now: () => activateTime });
+
+    vi.setSystemTime(new Date("2026-02-10T08:00:00.000Z"));
+    const checkin = await createCheckin(
+      { goalId: goal.id, checkinDate: "2026-02-10", value: 10, note: "达标打卡" },
+      [{ filePath: "/uploads/checkins/us09-20.jpg", fileSize: 1024 }],
+      challenger.id,
+      { prisma: prisma as unknown as CheckinPrismaClient }
+    );
+    await reviewCheckin(checkin.id, { action: "CONFIRMED" }, supervisor.id, {
+      prisma: prisma as unknown as CheckinPrismaClient,
+    });
+
+    const settleTime = new Date("2026-02-11T16:00:00.000Z"); // Asia/Shanghai = 2026-02-12 00:00
+    vi.setSystemTime(settleTime);
+    await runGoalStatusSchedulerTick({ prisma, now: () => settleTime });
+
+    await confirmSettlement(goal.id, supervisor.id, {
+      prisma: prisma as unknown as SettlementPrismaClient,
+    });
+
+    const feed = await getFeedEvents(group.id, supervisor.id, { limit: 50 }, {
+      prisma: prisma as unknown as FeedPrismaClient,
+    });
+
+    const unlockedEvent = feed.events.find(
+      (item) =>
+        item.eventType === "DURATION_UNLOCKED" &&
+        (item.metadata as Record<string, unknown>).goalId === goal.id &&
+        (item.metadata as Record<string, unknown>).userId === challenger.id
+    );
+
+    expect(unlockedEvent).toBeDefined();
+    expect(unlockedEvent?.actorNickname).toBeNull();
+    expect(unlockedEvent?.metadata).toMatchObject({
+      goalId: goal.id,
+      goalName: "跑步阶梯解锁",
+      userId: challenger.id,
+      challengerNickname: challenger.nickname,
+      category: "跑步",
+      fromMaxMonths: 1,
+      toMaxMonths: 2,
     });
   });
 });

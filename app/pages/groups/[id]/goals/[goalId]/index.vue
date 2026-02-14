@@ -325,6 +325,9 @@ function getCheckinStatusClass(status: string) {
 
 // --- 打卡审核相关 ---
 const isSupervisor = computed(() => goal.value?.myRole === 'SUPERVISOR')
+const settlementActionText = computed(() =>
+  isSupervisor.value ? '前往结算确认' : '查看结算进度',
+)
 
 const isReviewing = ref(false)
 const reviewError = ref('')
@@ -558,6 +561,42 @@ function getReviewActionClass(action: string) {
           >
             <Icon name="lucide:check-circle" class="w-5 h-5" />
             打卡
+          </NuxtLink>
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/progress`"
+            class="flex-1 py-3 px-4 bg-white text-primary font-medium rounded-lg shadow-lg hover:bg-gray-50 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:bar-chart-3" class="w-5 h-5" />
+            查看进度
+          </NuxtLink>
+        </div>
+
+        <!-- 操作按钮：结算 -->
+        <div v-if="goal.status === 'SETTLING'" class="flex gap-3">
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/settlement`"
+            class="flex-1 py-3 px-4 bg-primary text-white font-medium rounded-lg shadow-lg hover:bg-primary/90 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:scale" class="w-5 h-5" />
+            {{ settlementActionText }}
+          </NuxtLink>
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/progress`"
+            class="flex-1 py-3 px-4 bg-white text-primary font-medium rounded-lg shadow-lg hover:bg-gray-50 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:bar-chart-3" class="w-5 h-5" />
+            查看进度
+          </NuxtLink>
+        </div>
+
+        <!-- 操作按钮：已归档 -->
+        <div v-if="goal.status === 'ARCHIVED'" class="flex gap-3">
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${goalId}/settlement`"
+            class="flex-1 py-3 px-4 bg-primary text-white font-medium rounded-lg shadow-lg hover:bg-primary/90 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Icon name="lucide:trophy" class="w-5 h-5" />
+            查看结算结果
           </NuxtLink>
           <NuxtLink
             :to="`/groups/${groupId}/goals/${goalId}/progress`"

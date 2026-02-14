@@ -16,6 +16,7 @@ export type GoalStatusSchedulerDeps = {
 
 export type GoalStatusSchedulerTickResult = {
   activatedCount: number;
+  settlingCount: number;
   voidedCount: number;
   expiredChangeRequestCount: number;
   voidedChangeRequestCount: number;
@@ -194,43 +195,20 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     data: { status: "EXPIRED" },
   });
 
-  // 进行中目标进入待结算后：该目标下所有待确认请求自动作废
-  const voidedBySettlingToEmit = await deps.prisma.goalChangeRequest.findMany({
-    where: {
-      status: "PENDING",
-      goal: {
-        status: "SETTLING",
-      },
-    },
-    select: {
-      id: true,
-      goalId: true,
-      type: true,
-      goal: {
-        select: {
-          name: true,
-          groupId: true,
-        },
-      },
-    },
-  });
-
-  const voidedBySettling = await deps.prisma.goalChangeRequest.updateMany({
-    where: {
-      status: "PENDING",
-      goal: {
-        status: "SETTLING",
-      },
-    },
-    data: { status: "VOIDED" },
-  });
-
   const groups = await deps.prisma.group.findMany({
     where: {
       goals: {
         some: {
-          status: { in: ["PENDING", "UPCOMING"] },
-          startDate: { lte: tomorrowUtcMidnight },
+          OR: [
+            {
+              status: { in: ["PENDING", "UPCOMING"] },
+              startDate: { lte: tomorrowUtcMidnight },
+            },
+            {
+              status: "ACTIVE",
+              endDate: { lt: tomorrowUtcMidnight },
+            },
+          ],
         },
       },
     },
@@ -240,6 +218,7 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
   const grouped = groupIdsByTimezone(groups);
 
   let activatedCount = 0;
+  let settlingCount = 0;
   let voidedCount = 0;
   let voidedChangeRequestCount = 0;
   let processedTimezoneCount = 0;
@@ -358,6 +337,41 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
       }
     }
 
+    // ACTIVE → SETTLING（小组时区“今天”已晚于 endDate）
+    const goalsToSettle = await deps.prisma.goal.findMany({
+      where: {
+        groupId: { in: groupIds },
+        status: "ACTIVE",
+        endDate: { lt: todayDate },
+      },
+      select: { id: true, name: true, groupId: true },
+    });
+
+    const settling = await deps.prisma.goal.updateMany({
+      where: {
+        groupId: { in: groupIds },
+        status: "ACTIVE",
+        endDate: { lt: todayDate },
+      },
+      data: { status: "SETTLING" },
+    });
+
+    for (const goal of goalsToSettle) {
+      await createFeedEvent(
+        {
+          eventType: "GOAL_STATUS_CHANGED",
+          groupId: goal.groupId,
+          metadata: {
+            goalId: goal.id,
+            goalName: goal.name,
+            fromStatus: "ACTIVE",
+            toStatus: "SETTLING",
+          },
+        },
+        { prisma: deps.prisma }
+      );
+    }
+
     // PENDING → VOIDED
     const goalsToVoid = await deps.prisma.goal.findMany({
       where: {
@@ -447,8 +461,40 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
     }
 
     activatedCount += activated.count;
+    settlingCount += settling.count;
     voidedCount += voided.count;
   }
+
+  // 进行中目标进入待结算后：该目标下所有待确认请求自动作废
+  const voidedBySettlingToEmit = await deps.prisma.goalChangeRequest.findMany({
+    where: {
+      status: "PENDING",
+      goal: {
+        status: "SETTLING",
+      },
+    },
+    select: {
+      id: true,
+      goalId: true,
+      type: true,
+      goal: {
+        select: {
+          name: true,
+          groupId: true,
+        },
+      },
+    },
+  });
+
+  const voidedBySettling = await deps.prisma.goalChangeRequest.updateMany({
+    where: {
+      status: "PENDING",
+      goal: {
+        status: "SETTLING",
+      },
+    },
+    data: { status: "VOIDED" },
+  });
 
   // 超时3天自动通过打卡
   const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
@@ -565,6 +611,7 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
 
   return {
     activatedCount,
+    settlingCount,
     voidedCount,
     expiredChangeRequestCount: expiredRequests.count + expiredByProposedDate.count,
     voidedChangeRequestCount: voidedChangeRequestCount + voidedBySettling.count,
@@ -606,9 +653,9 @@ export async function startGoalStatusScheduler(
     isRunning = true;
     try {
       const result = await runGoalStatusSchedulerTick(deps);
-      if (result.activatedCount > 0 || result.voidedCount > 0 || result.expiredChangeRequestCount > 0 || result.voidedChangeRequestCount > 0 || result.autoApprovedCheckinCount > 0) {
+      if (result.activatedCount > 0 || result.settlingCount > 0 || result.voidedCount > 0 || result.expiredChangeRequestCount > 0 || result.voidedChangeRequestCount > 0 || result.autoApprovedCheckinCount > 0) {
         logger.info?.(
-          `[scheduler] Goal status updated: activated=${result.activatedCount}, voided=${result.voidedCount}, ` +
+          `[scheduler] Goal status updated: activated=${result.activatedCount}, settling=${result.settlingCount}, voided=${result.voidedCount}, ` +
             `expiredRequests=${result.expiredChangeRequestCount}, voidedRequests=${result.voidedChangeRequestCount}, ` +
             `autoApprovedCheckins=${result.autoApprovedCheckinCount}, ` +
             `groups=${result.checkedGroupCount}, timezones=${result.processedTimezoneCount}/${result.checkedTimezoneCount}.`

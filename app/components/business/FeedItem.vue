@@ -38,6 +38,7 @@ const eventStyleMap: Record<FeedEventType, EventStyle> = {
   CHECKIN_CONFIRMED: { icon: 'lucide:circle-check-big', bgColor: 'bg-green-100', iconColor: 'text-green-600' },
   CHECKIN_AUTO_APPROVED: { icon: 'lucide:timer', bgColor: 'bg-amber-100', iconColor: 'text-amber-600' },
   SETTLEMENT_COMPLETED: { icon: 'lucide:trophy', bgColor: 'bg-orange-100', iconColor: 'text-cta' },
+  DURATION_UNLOCKED: { icon: 'lucide:lock-open', bgColor: 'bg-emerald-100', iconColor: 'text-emerald-700' },
 }
 
 const style = computed(() => eventStyleMap[props.event.eventType])
@@ -317,6 +318,20 @@ const formattedTime = computed(() => {
             class="font-medium text-primary hover:underline cursor-pointer"
           >{{ meta.goalName }}#{{ meta.goalId }}</NuxtLink>
           已完成结算
+        </template>
+
+        <!-- DURATION_UNLOCKED (system) -->
+        <template v-else-if="event.eventType === 'DURATION_UNLOCKED'">
+          <span class="font-semibold">{{ meta.challengerNickname }}</span>
+          在
+          <span class="font-medium">「{{ meta.category }}」</span>
+          类别解锁周期：
+          <span class="font-medium">{{ meta.fromMaxMonths }}个月</span>
+          → <span class="font-medium">{{ meta.toMaxMonths }}个月</span>
+          <NuxtLink
+            :to="`/groups/${groupId}/goals/${meta.goalId}`"
+            class="ml-1 font-medium text-primary hover:underline cursor-pointer"
+          >{{ meta.goalName }}#{{ meta.goalId }}</NuxtLink>
         </template>
       </p>
 

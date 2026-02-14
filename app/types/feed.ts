@@ -16,7 +16,8 @@ export type FeedEventType =
   | "CHANGE_REQUEST_RESULT"
   | "CHECKIN_CONFIRMED"
   | "CHECKIN_AUTO_APPROVED"
-  | "SETTLEMENT_COMPLETED";
+  | "SETTLEMENT_COMPLETED"
+  | "DURATION_UNLOCKED";
 
 export interface FeedEventResponse {
   id: number;

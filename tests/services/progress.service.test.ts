@@ -459,7 +459,7 @@ describe("progress.service getProgress", () => {
 
     await expectAppError(getProgress(10, 1, { prisma }), {
       statusCode: 400,
-      message: "仅进行中的目标可查看进度",
+      message: "仅进行中、待结算或已归档的目标可查看进度",
     });
   });
 
