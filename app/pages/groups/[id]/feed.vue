@@ -25,11 +25,95 @@ const { data: feedData, status } = await useFetch<FeedListResponse>(
 const events = ref(feedData.value?.events ?? [])
 const nextCursor = ref(feedData.value?.nextCursor ?? null)
 const loadingMore = ref(false)
+const nowMs = ref(Date.now())
+let nowTimer: ReturnType<typeof setTimeout> | null = null
+
+const TEN_SECONDS_MS = 10000
+const MINUTE_MS = 60000
+const HOUR_MS = 3600000
+const DAY_MS = 86400000
+
+function clearNowTimer() {
+  if (nowTimer) {
+    clearTimeout(nowTimer)
+    nowTimer = null
+  }
+}
+
+function getRefreshStepMs(currentNowMs: number) {
+  let hasMinuteLevelRelative = false
+  let hasHourLevelRelative = false
+  let hasDayLevelRelative = false
+
+  for (const event of events.value) {
+    const createdAtMs = new Date(event.createdAt).getTime()
+    const diffMs = currentNowMs - createdAtMs
+    const diffMin = Math.floor(diffMs / MINUTE_MS)
+    const diffHour = Math.floor(diffMs / HOUR_MS)
+    const diffDay = Math.floor(diffMs / DAY_MS)
+
+    if (diffDay >= 7) continue
+
+    if (diffMs < MINUTE_MS) return TEN_SECONDS_MS
+    if (diffMin < 60) hasMinuteLevelRelative = true
+    if (diffHour < 24) hasHourLevelRelative = true
+    else hasDayLevelRelative = true
+  }
+
+  if (hasMinuteLevelRelative) return MINUTE_MS
+  if (hasHourLevelRelative) return HOUR_MS
+  if (hasDayLevelRelative) return DAY_MS
+
+  return null
+}
+
+function isPageHidden() {
+  return typeof document !== 'undefined' && document.hidden
+}
+
+function scheduleNowUpdate() {
+  clearNowTimer()
+
+  if (events.value.length === 0) return
+  if (isPageHidden()) return
+
+  const currentNowMs = Date.now()
+  const stepMs = getRefreshStepMs(currentNowMs)
+  if (!stepMs) return
+  const nextChangeAt = Math.floor(currentNowMs / stepMs) * stepMs + stepMs
+  const delayMs = Math.max(nextChangeAt - currentNowMs, 0)
+
+  nowTimer = setTimeout(() => {
+    nowMs.value = Date.now()
+    scheduleNowUpdate()
+  }, delayMs + 20)
+}
+
+function handleVisibilityChange() {
+  if (isPageHidden()) {
+    clearNowTimer()
+    return
+  }
+
+  nowMs.value = Date.now()
+  scheduleNowUpdate()
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  scheduleNowUpdate()
+})
+
+onUnmounted(() => {
+  clearNowTimer()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 
 watch(feedData, (val) => {
   if (val) {
     events.value = val.events
     nextCursor.value = val.nextCursor
+    scheduleNowUpdate()
   }
 })
 
@@ -42,6 +126,7 @@ async function loadMore() {
     })
     events.value.push(...data.events)
     nextCursor.value = data.nextCursor
+    scheduleNowUpdate()
   } catch {
     // silently fail, user can retry
   } finally {
@@ -82,6 +167,7 @@ async function loadMore() {
             :event="event"
             :group-id="groupId"
             :timezone="timezone"
+            :now-ms="nowMs"
           />
         </div>
 

@@ -5,6 +5,7 @@ interface Props {
   event: FeedEventResponse
   groupId: number
   timezone: string
+  nowMs: number
 }
 
 const props = defineProps<Props>()
@@ -66,8 +67,7 @@ const changeRequestResultLabel: Record<string, string> = {
 
 const formattedTime = computed(() => {
   const date = new Date(props.event.createdAt)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
+  const diffMs = props.nowMs - date.getTime()
   const diffMin = Math.floor(diffMs / 60000)
   const diffHour = Math.floor(diffMs / 3600000)
   const diffDay = Math.floor(diffMs / 86400000)
