@@ -9,7 +9,10 @@ import type {
   VoteGoalChangeRequestResponse,
 } from "../types/goal-change-request";
 import { AppError } from "../utils/app-error";
-import { getGoalChangeRequestEffectiveExpiresAt } from "../utils/goal-change-request-deadline";
+import {
+  getGoalChangeRequestDisplayExpiresAt,
+  getGoalChangeRequestEffectiveExpiresAt,
+} from "../utils/goal-change-request-deadline";
 import { createFeedEvent } from "./feed.service";
 
 const GOAL_NAME_MAX_LENGTH = 50;
@@ -117,11 +120,14 @@ function mapChangeRequestResponse(
   );
 
   const myVote = votes.find((v) => v.userId === userId);
-  const effectiveExpiresAt = getGoalChangeRequestEffectiveExpiresAt({
+  const effectiveExpiresAt = getGoalChangeRequestDisplayExpiresAt({
     type: request.type,
     expiresAt: request.expiresAt,
     proposedChanges: request.proposedChanges,
     timezone: request.goal?.group?.timezone,
+    goalStatus: request.goal?.status,
+    goalStartDate: request.goal?.startDate,
+    goalEndDate: request.goal?.endDate,
   });
 
   return {
@@ -620,7 +626,14 @@ export async function createGoalChangeRequest(
       where: { id: changeRequest.id },
       include: {
         initiator: { include: { user: { select: { nickname: true } } } },
-        goal: { select: { group: { select: { timezone: true } } } },
+        goal: {
+          select: {
+            status: true,
+            startDate: true,
+            endDate: true,
+            group: { select: { timezone: true } },
+          },
+        },
         votes: {
           include: {
             member: { include: { user: { select: { nickname: true } } } },
@@ -877,7 +890,14 @@ export async function getActiveChangeRequest(
     },
     include: {
       initiator: { include: { user: { select: { nickname: true } } } },
-      goal: { select: { group: { select: { timezone: true } } } },
+      goal: {
+        select: {
+          status: true,
+          startDate: true,
+          endDate: true,
+          group: { select: { timezone: true } },
+        },
+      },
       votes: {
         include: {
           member: { include: { user: { select: { nickname: true } } } },

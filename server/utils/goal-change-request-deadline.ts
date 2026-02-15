@@ -12,6 +12,32 @@ function parseDateOnlyParts(dateOnly: string): { year: number; month: number; da
   return { year, month, day };
 }
 
+function formatDateOnly(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDaysToDateOnly(dateOnly: string, days: number): string | null {
+  const parsed = parseDateOnlyParts(dateOnly);
+  if (!parsed) return null;
+
+  const shifted = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + days));
+  if (Number.isNaN(shifted.getTime())) {
+    return null;
+  }
+
+  return formatDateOnly(shifted);
+}
+
+function toDateOnly(value: unknown): string | null {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatDateOnly(value);
+  }
+  return null;
+}
+
 function getPart(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): number | null {
   const value = parts.find((part) => part.type === type)?.value;
   if (!value) return null;
@@ -96,4 +122,53 @@ export function getGoalChangeRequestEffectiveExpiresAt(input: {
   }
 
   return effectiveExpiresAt;
+}
+
+export function getGoalChangeRequestDisplayExpiresAt(input: {
+  type: string;
+  expiresAt: Date;
+  proposedChanges: unknown;
+  timezone?: string;
+  goalStatus?: string;
+  goalStartDate?: unknown;
+  goalEndDate?: unknown;
+}): Date {
+  let displayExpiresAt = getGoalChangeRequestEffectiveExpiresAt(input);
+
+  if (!input.timezone) {
+    return displayExpiresAt;
+  }
+
+  const changes = input.proposedChanges as Record<string, unknown> | null;
+  const hasProposedStartDate = typeof changes?.startDate === "string";
+
+  const shouldApplyGoalStartDeadline =
+    input.goalStatus === "PENDING" ||
+    (input.goalStatus === "UPCOMING" && input.type === "MODIFY" && hasProposedStartDate);
+
+  if (shouldApplyGoalStartDeadline) {
+    const goalStartDateOnly = toDateOnly(input.goalStartDate);
+    if (goalStartDateOnly) {
+      const goalStartAt = getUtcDateTimeForTimezoneDateStart(goalStartDateOnly, input.timezone);
+      if (goalStartAt && goalStartAt.getTime() < displayExpiresAt.getTime()) {
+        displayExpiresAt = goalStartAt;
+      }
+    }
+  }
+
+  const shouldApplyGoalEndDeadline = input.goalStatus === "ACTIVE";
+  if (shouldApplyGoalEndDeadline) {
+    const goalEndDateOnly = toDateOnly(input.goalEndDate);
+    if (goalEndDateOnly) {
+      const goalEndNextDateOnly = addDaysToDateOnly(goalEndDateOnly, 1);
+      if (goalEndNextDateOnly) {
+        const goalEndAfterDay = getUtcDateTimeForTimezoneDateStart(goalEndNextDateOnly, input.timezone);
+        if (goalEndAfterDay && goalEndAfterDay.getTime() < displayExpiresAt.getTime()) {
+          displayExpiresAt = goalEndAfterDay;
+        }
+      }
+    }
+  }
+
+  return displayExpiresAt;
 }

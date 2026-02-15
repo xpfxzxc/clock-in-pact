@@ -172,7 +172,15 @@ function makeChangeRequest(overrides: Record<string, unknown> = {}) {
     createdAt: NOW,
     updatedAt: NOW,
     initiator: { id: 1, userId: 1, user: { nickname: "用户A" } },
-    goal: { id: 1, name: "跑步", groupId: 10, group: { timezone: "Asia/Shanghai" } },
+    goal: {
+      id: 1,
+      name: "跑步",
+      groupId: 10,
+      status: "PENDING",
+      startDate: FUTURE_START,
+      endDate: FUTURE_END,
+      group: { timezone: "Asia/Shanghai" },
+    },
     votes: [
       {
         memberId: 1,
@@ -770,6 +778,60 @@ describe("goal-change-request.service", () => {
           },
         })
       );
+    });
+
+    it("MODIFY 未改日期时，返回目标当前开始日期触发的截止时间", async () => {
+      ctx.mocks.goalFindUnique.mockResolvedValue({ id: 1, groupId: 10 });
+      ctx.mocks.groupMemberFindUnique.mockResolvedValue({ id: 2 });
+      ctx.mocks.goalChangeRequestFindFirst.mockResolvedValue(
+        makeChangeRequest({
+          proposedChanges: { name: "只改名称" },
+          goal: {
+            id: 1,
+            name: "跑步",
+            groupId: 10,
+            status: "PENDING",
+            startDate: new Date(Date.UTC(2026, 2, 16)),
+            endDate: new Date(Date.UTC(2026, 3, 30)),
+            group: { timezone: "Asia/Shanghai" },
+          },
+        })
+      );
+
+      const result = await getActiveChangeRequest(1, 2, {
+        prisma: ctx.prisma,
+        now: () => NOW,
+      });
+
+      expect(result?.expiresAt).toBe("2026-03-16T10:00:00.000Z");
+      expect(result?.effectiveExpiresAt).toBe("2026-03-15T16:00:00.000Z");
+    });
+
+    it("MODIFY 未改日期时，返回目标当前结束日期触发的截止时间", async () => {
+      ctx.mocks.goalFindUnique.mockResolvedValue({ id: 1, groupId: 10 });
+      ctx.mocks.groupMemberFindUnique.mockResolvedValue({ id: 2 });
+      ctx.mocks.goalChangeRequestFindFirst.mockResolvedValue(
+        makeChangeRequest({
+          proposedChanges: { name: "只改名称" },
+          goal: {
+            id: 1,
+            name: "跑步",
+            groupId: 10,
+            status: "ACTIVE",
+            startDate: new Date(Date.UTC(2026, 2, 1)),
+            endDate: new Date(Date.UTC(2026, 2, 15)),
+            group: { timezone: "Asia/Shanghai" },
+          },
+        })
+      );
+
+      const result = await getActiveChangeRequest(1, 2, {
+        prisma: ctx.prisma,
+        now: () => NOW,
+      });
+
+      expect(result?.expiresAt).toBe("2026-03-16T10:00:00.000Z");
+      expect(result?.effectiveExpiresAt).toBe("2026-03-15T16:00:00.000Z");
     });
 
 

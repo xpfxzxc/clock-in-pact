@@ -9,7 +9,10 @@ import type {
 } from "../types/goal";
 import type { GoalChangeRequestResponse, GoalChangeVoteInfo, GoalProposedChanges } from "../types/goal-change-request";
 import { AppError } from "../utils/app-error";
-import { getGoalChangeRequestEffectiveExpiresAt } from "../utils/goal-change-request-deadline";
+import {
+  getGoalChangeRequestDisplayExpiresAt,
+  getGoalChangeRequestEffectiveExpiresAt,
+} from "../utils/goal-change-request-deadline";
 import { createFeedEvent } from "./feed.service";
 
 const GOAL_NAME_MAX_LENGTH = 50;
@@ -478,14 +481,14 @@ export async function getGoalDetail(
   detail.myRole = membership.role;
 
   if (activeChangeRequest) {
-    const effectiveExpiresAt = getGoalChangeRequestEffectiveExpiresAt({
+    const expiresAtForValidation = getGoalChangeRequestEffectiveExpiresAt({
       type: activeChangeRequest.type,
       expiresAt: activeChangeRequest.expiresAt,
       proposedChanges: activeChangeRequest.proposedChanges,
       timezone: activeChangeRequest.goal?.group?.timezone,
     });
 
-    if (effectiveExpiresAt.getTime() <= now.getTime()) {
+    if (expiresAtForValidation.getTime() <= now.getTime()) {
       await deps.prisma.goalChangeRequest.updateMany({
         where: { id: activeChangeRequest.id, status: "PENDING" },
         data: { status: "EXPIRED" },
@@ -493,6 +496,16 @@ export async function getGoalDetail(
       detail.activeChangeRequest = null;
       return detail;
     }
+
+    const effectiveExpiresAt = getGoalChangeRequestDisplayExpiresAt({
+      type: activeChangeRequest.type,
+      expiresAt: activeChangeRequest.expiresAt,
+      proposedChanges: activeChangeRequest.proposedChanges,
+      timezone: activeChangeRequest.goal?.group?.timezone,
+      goalStatus: goal.status,
+      goalStartDate: goal.startDate,
+      goalEndDate: goal.endDate,
+    });
 
     const votes: GoalChangeVoteInfo[] = (activeChangeRequest.votes ?? []).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

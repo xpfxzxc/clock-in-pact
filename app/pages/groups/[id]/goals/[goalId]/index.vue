@@ -191,17 +191,7 @@ function updateCountdown() {
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
   const seconds = Math.floor((diff % (1000 * 60)) / 1000)
 
-  const proposedChanges = activeRequest.proposedChanges
-  const isEarlyExpiry = activeRequest.type === 'MODIFY' && Boolean(
-    proposedChanges?.startDate || proposedChanges?.endDate,
-  )
-
-  if (isEarlyExpiry) {
-    remainingTime.value = `距自动过期 ${hours}h ${minutes}m ${seconds}s`
-    return
-  }
-
-  remainingTime.value = `剩余 ${hours}h ${minutes}m ${seconds}s`
+  remainingTime.value = `距离失效 ${hours}h ${minutes}m ${seconds}s`
 }
 
 onMounted(() => {

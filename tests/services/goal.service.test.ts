@@ -395,6 +395,55 @@ describe("goal.service listGroupGoals（不自动推进状态）", () => {
 });
 
 describe("goal.service getGoalDetail", () => {
+  it("未修改日期字段时，activeChangeRequest 的有效截止时间应取目标当前开始日期", async () => {
+    const { prisma, mocks } = createPrismaMock();
+
+    mocks.goalFindUnique.mockResolvedValueOnce({
+      id: 10,
+      groupId: 1,
+      name: "跑步挑战",
+      category: "跑步",
+      targetValue: 60,
+      unit: "km",
+      startDate: new Date(Date.UTC(2026, 1, 6)),
+      endDate: new Date(Date.UTC(2026, 2, 20)),
+      rewardPunishment: "失败者请成功者吃饭",
+      evidenceRequirement: "跑步APP截图",
+      status: "PENDING",
+      createdById: 1,
+      createdAt: new Date("2026-02-01T00:00:00.000Z"),
+      createdBy: { id: 1, nickname: "创建者" },
+      confirmations: [],
+      participants: [],
+    });
+    mocks.groupMemberFindUnique.mockResolvedValueOnce({ id: 100, role: "SUPERVISOR" });
+    mocks.goalChangeRequestFindFirst.mockResolvedValueOnce({
+      id: 500,
+      goalId: 10,
+      type: "MODIFY",
+      status: "PENDING",
+      initiatorId: 100,
+      proposedChanges: { name: "新目标名称" },
+      expiresAt: new Date("2026-02-06T12:00:00.000Z"),
+      createdAt: new Date("2026-02-05T12:00:00.000Z"),
+      initiator: { user: { nickname: "创建者" } },
+      goal: { group: { timezone: "Asia/Shanghai" } },
+      votes: [
+        {
+          memberId: 100,
+          status: "APPROVED",
+          updatedAt: new Date("2026-02-05T12:00:00.000Z"),
+          member: { userId: 1, role: "SUPERVISOR", user: { nickname: "创建者" } },
+        },
+      ],
+    });
+
+    const result = await getGoalDetail(10, 1, { prisma, now: () => new Date() });
+
+    expect(result.activeChangeRequest?.expiresAt).toBe("2026-02-06T12:00:00.000Z");
+    expect(result.activeChangeRequest?.effectiveExpiresAt).toBe("2026-02-05T16:00:00.000Z");
+  });
+
   it("场景10：有效截止时间已到时，activeChangeRequest 应过期并不返回", async () => {
     const { prisma, mocks } = createPrismaMock();
     vi.setSystemTime(new Date("2026-03-15T16:00:00.000Z")); // Asia/Shanghai = 2026-03-16 00:00:00
