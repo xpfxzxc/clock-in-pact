@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { deleteCheckinEvidence, saveCheckinEvidence } from "../../server/utils/storage";
+import { deleteCheckinEvidence, resolveCheckinEvidenceFilePath, saveCheckinEvidence } from "../../server/utils/storage";
 
 vi.mock("node:crypto", async () => {
   const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
@@ -59,5 +59,11 @@ describe("storage utils", () => {
   it("deleteCheckinEvidence: 非法路径不应误删", async () => {
     await expect(deleteCheckinEvidence("/uploads/../sneaky.txt")).resolves.toBeUndefined();
     await expect(deleteCheckinEvidence("/not-uploads/checkins/x.jpg")).resolves.toBeUndefined();
+  });
+
+  it("resolveCheckinEvidenceFilePath: 本地路径保持不变", async () => {
+    await expect(resolveCheckinEvidenceFilePath("/uploads/checkins/example.jpg")).resolves.toBe(
+      "/uploads/checkins/example.jpg"
+    );
   });
 });

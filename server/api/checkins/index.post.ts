@@ -7,6 +7,7 @@ import { deleteCheckinEvidence, saveCheckinEvidence } from "../../utils/storage"
 
 const MAX_EVIDENCE_COUNT = 5;
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const CLIENT_UPLOAD_ERROR_MESSAGES = ["单张图片不超过5MB", "不支持的文件格式"];
 
 interface MultipartPart {
   name?: string;
@@ -101,7 +102,10 @@ export default defineEventHandler(async (event) => {
         const saved = await saveCheckinEvidence(evidencePart.data, evidencePart.filename);
         savedEvidence.push(saved);
       } catch (error) {
-        if (error instanceof Error) {
+        if (
+          error instanceof Error
+          && CLIENT_UPLOAD_ERROR_MESSAGES.some((message) => error.message.includes(message))
+        ) {
           throw createError({ statusCode: 400, message: error.message });
         }
         throw error;

@@ -24,6 +24,7 @@
 - **数据库**: PostgreSQL 16 + Prisma 7
 - **样式**: Tailwind CSS
 - **认证**: nuxt-auth-utils
+- **文件存储**: 本地文件系统（开发/测试）+ 腾讯云 COS（生产）
 - **定时任务**: node-cron
 - **测试**: Vitest
 
@@ -42,6 +43,21 @@ cp .env.example .env
 ```
 
 编辑 `.env`，设置 `NUXT_SESSION_PASSWORD`（至少 32 位随机字符串）。
+
+文件存储默认策略：
+- `NODE_ENV=production` 时默认使用 COS
+- 其他环境默认使用本地文件系统（`public/uploads`）
+- 可通过 `STORAGE_TYPE=local|cos` 显式覆盖
+- COS 模式默认按“私有桶 + 签名 URL”访问证据图片
+
+生产环境最少需要配置：
+- `COS_SECRET_ID`
+- `COS_SECRET_KEY`
+- `COS_BUCKET`（需包含 APPID，如 `bucket-1250000000`）
+- `COS_REGION`（如 `ap-shanghai`）
+
+可选配置：
+- `COS_SIGNED_URL_EXPIRES_IN_SECONDS`：签名 URL 过期秒数（默认 `900`）
 
 ### 3. 安装依赖
 

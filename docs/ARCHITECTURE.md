@@ -52,11 +52,12 @@ clock-in-pact/
 DATABASE_URL="postgresql://postgres:123456@localhost:5432/clockinpact"
 
 # 文件存储（production 时配置）
-STORAGE_TYPE="local"  # local | cos
+STORAGE_TYPE=""       # 留空时：production 自动 cos，其他环境自动 local；也可显式 local | cos
 COS_SECRET_ID=""
 COS_SECRET_KEY=""
-COS_BUCKET=""
-COS_REGION=""
+COS_BUCKET=""         # 例如：clock-in-pact-1250000000（Bucket-APPID）
+COS_REGION=""         # 例如：ap-shanghai
+COS_SIGNED_URL_EXPIRES_IN_SECONDS="900" # 可选，私有桶签名 URL 过期秒数
 
 # 认证
 NUXT_SESSION_PASSWORD="至少32位随机字符串"

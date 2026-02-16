@@ -2,6 +2,7 @@ import type { MemberRole, PrismaClient } from "@prisma/client";
 
 import type { CheckinEvidenceResponse, CheckinListResponse, CheckinResponse, CreateCheckinInput, ReviewCheckinInput, ReviewCheckinResponse } from "../types/checkin";
 import { AppError } from "../utils/app-error";
+import { resolveCheckinEvidenceFilePath } from "../utils/storage";
 import { createFeedEvent } from "./feed.service";
 
 const CHECKIN_NOTE_MAX_LENGTH = 500;
@@ -159,7 +160,15 @@ function assertEvidenceFiles(evidenceFiles: CheckinEvidenceFileInput[]): void {
   }
 }
 
-function mapCheckinResponse(checkin: CheckinRecord): CheckinResponse {
+async function mapCheckinResponse(checkin: CheckinRecord): Promise<CheckinResponse> {
+  const evidence = await Promise.all(
+    (checkin.evidence ?? []).map(async (item) => ({
+      id: item.id,
+      filePath: await resolveCheckinEvidenceFilePath(item.filePath),
+      fileSize: item.fileSize,
+    }))
+  );
+
   return {
     id: checkin.id,
     goalId: checkin.goalId,
@@ -168,11 +177,7 @@ function mapCheckinResponse(checkin: CheckinRecord): CheckinResponse {
     value: decimalToNumber(checkin.value),
     note: checkin.note,
     status: checkin.status,
-    evidence: (checkin.evidence ?? []).map((item) => ({
-      id: item.id,
-      filePath: item.filePath,
-      fileSize: item.fileSize,
-    })),
+    evidence,
     reviews: [],
     createdByNickname: checkin.member.user.nickname,
     createdAt: checkin.createdAt.toISOString(),
@@ -289,7 +294,7 @@ export async function createCheckin(
   const todayInTimeZone = getTodayDateStringInTimeZone(goal.group.timezone);
   assertDateRange(checkinDate, goal.startDate, goal.endDate, todayInTimeZone);
 
-  return deps.prisma.$transaction(async (tx: CheckinPrismaTransactionClient) => {
+  const created = await deps.prisma.$transaction(async (tx: CheckinPrismaTransactionClient) => {
     const createdCheckin = await tx.checkin.create({
       data: {
         goalId: goal.id,
@@ -350,8 +355,10 @@ export async function createCheckin(
       throw new AppError(500, "打卡创建失败");
     }
 
-    return mapCheckinResponse(result);
+    return result;
   });
+
+  return mapCheckinResponse(created);
 }
 
 export async function listCheckins(
@@ -398,22 +405,28 @@ export async function listCheckins(
 
   const isSupervisor = member.role === "SUPERVISOR";
 
-  return {
-    checkins: checkins.map((checkin: CheckinRecord & { reviews?: Array<{ memberId: number; action: string; reason: string | null; createdAt: Date; member: { user: { nickname: string } } }> }) => {
-      const response = mapCheckinResponse(checkin);
-      response.reviews = (checkin.reviews ?? []).map((r) => ({
-        memberId: r.memberId,
-        reviewerNickname: r.member.user.nickname,
-        action: r.action as "CONFIRMED" | "DISPUTED",
-        reason: r.reason,
-        createdAt: r.createdAt.toISOString(),
-      }));
-      if (isSupervisor) {
-        const myReview = (checkin.reviews ?? []).find((r) => r.memberId === member.id);
-        response.myReviewAction = myReview ? (myReview.action as "CONFIRMED" | "DISPUTED") : null;
+  const mappedCheckins = await Promise.all(
+    checkins.map(
+      async (checkin: CheckinRecord & { reviews?: Array<{ memberId: number; action: string; reason: string | null; createdAt: Date; member: { user: { nickname: string } } }> }) => {
+        const response = await mapCheckinResponse(checkin);
+        response.reviews = (checkin.reviews ?? []).map((r) => ({
+          memberId: r.memberId,
+          reviewerNickname: r.member.user.nickname,
+          action: r.action as "CONFIRMED" | "DISPUTED",
+          reason: r.reason,
+          createdAt: r.createdAt.toISOString(),
+        }));
+        if (isSupervisor) {
+          const myReview = (checkin.reviews ?? []).find((r) => r.memberId === member.id);
+          response.myReviewAction = myReview ? (myReview.action as "CONFIRMED" | "DISPUTED") : null;
+        }
+        return response;
       }
-      return response;
-    }),
+    )
+  );
+
+  return {
+    checkins: mappedCheckins,
     total: checkins.length,
   };
 }
