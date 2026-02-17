@@ -1,7 +1,10 @@
 import { fileURLToPath } from 'node:url'
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
-const nodeCronTraceEntry = fileURLToPath(new URL('./node_modules/node-cron/dist/cjs/node-cron.js', import.meta.url))
+const nodeCronTraceEntries = [
+  fileURLToPath(new URL('./node_modules/node-cron/dist/cjs/node-cron.js', import.meta.url)),
+  fileURLToPath(new URL('./node_modules/node-cron/dist/esm/node-cron.js', import.meta.url)),
+]
 
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
@@ -32,7 +35,7 @@ export default defineNuxtConfig({
     },
     externals: {
       external: ['node-cron'],
-      traceInclude: [nodeCronTraceEntry],
+      traceInclude: nodeCronTraceEntries,
     },
   },
 

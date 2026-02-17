@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { createRequire } from "node:module";
 import { createFeedEvent } from "./feed.service";
 
 export type SchedulerPrismaClient =
@@ -29,6 +30,13 @@ export type GoalStatusSchedulerTickResult = {
 type CronTask = {
   stop: () => void;
 };
+
+const runtimeRequire = (() => {
+  // Nitro bundles may rewrite import.meta.url to file:///_entry.js, which breaks resolution.
+  // Prefer process entrypoint (argv[1]) and fallback to cwd package.json.
+  const entrypoint = typeof process.argv[1] === "string" ? process.argv[1] : "";
+  return createRequire(entrypoint || `${process.cwd()}/package.json`);
+})();
 
 function parseDateOnly(dateString: string): Date {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
@@ -622,13 +630,29 @@ export async function runGoalStatusSchedulerTick(deps: GoalStatusSchedulerDeps):
   };
 }
 
-async function resolveCron(): Promise<{ schedule: (expression: string, cb: () => void) => CronTask }> {
-  const mod = await import("node-cron");
-  const cron = "default" in mod ? (mod as { default: unknown }).default : mod;
+function toCronModule(mod: unknown): { schedule: (expression: string, cb: () => void) => CronTask } {
+  const cron =
+    mod && typeof mod === "object" && "default" in mod ? (mod as { default: unknown }).default : mod;
   if (!cron || typeof cron !== "object" || typeof (cron as { schedule?: unknown }).schedule !== "function") {
     throw new Error("Invalid node-cron module shape");
   }
   return cron as { schedule: (expression: string, cb: () => void) => CronTask };
+}
+
+async function resolveCron(): Promise<{ schedule: (expression: string, cb: () => void) => CronTask }> {
+  try {
+    const mod = await import("node-cron");
+    return toCronModule(mod);
+  } catch (error) {
+    const maybeError = error as { code?: string };
+    // Nitro external trace may only include CJS files for node-cron.
+    // In that case ESM import path is missing, so fallback to require() path.
+    if (maybeError.code !== "ERR_MODULE_NOT_FOUND") {
+      throw error;
+    }
+    const cjsMod = runtimeRequire("node-cron");
+    return toCronModule(cjsMod);
+  }
 }
 
 export async function startGoalStatusScheduler(
