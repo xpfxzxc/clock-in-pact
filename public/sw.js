@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clock-in-pact-v1'
+const CACHE_NAME = 'clock-in-pact-v2'
 const PRECACHE_ASSETS = [
   '/',
   '/favicon.ico',
@@ -40,7 +40,16 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  const isLocalhost = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1'
+  if (isLocalhost) {
+    return
+  }
+
   if (url.pathname.startsWith('/api/')) {
+    return
+  }
+
+  if (url.pathname.startsWith('/_nuxt/')) {
     return
   }
 
