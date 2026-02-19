@@ -30,6 +30,12 @@ export default defineNuxtConfig({
   },
 
   nitro: {
+    rollupConfig: {
+      output: {
+        // Node 22 no longer accepts legacy `assert` import attributes for JSON modules.
+        importAttributesKey: 'with',
+      },
+    },
     experimental: {
       legacyExternals: true,
     },
