@@ -51,6 +51,11 @@ export default defineNuxtConfig({
         secure: process.env.NODE_ENV === 'production',
       },
     },
+    public: {
+      showIcpFiling: process.env.NUXT_PUBLIC_SHOW_ICP_FILING === 'true',
+      icpFilingText: process.env.NUXT_PUBLIC_ICP_FILING_TEXT || '',
+      icpFilingLink: process.env.NUXT_PUBLIC_ICP_FILING_LINK || 'https://beian.miit.gov.cn/',
+    },
   },
 
   modules: [

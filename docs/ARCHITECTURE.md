@@ -61,6 +61,11 @@ COS_SIGNED_URL_EXPIRES_IN_SECONDS="900" # 可选，私有桶签名 URL 过期秒
 
 # 认证
 NUXT_SESSION_PASSWORD="至少32位随机字符串"
+
+# 备案号展示（登录页和登录后首页底部中间）
+NUXT_PUBLIC_SHOW_ICP_FILING="false"
+NUXT_PUBLIC_ICP_FILING_TEXT=""
+NUXT_PUBLIC_ICP_FILING_LINK="https://beian.miit.gov.cn/"
 ```
 
 ## 本地开发

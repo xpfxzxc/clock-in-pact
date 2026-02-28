@@ -59,6 +59,11 @@ cp .env.example .env
 可选配置：
 - `COS_SIGNED_URL_EXPIRES_IN_SECONDS`：签名 URL 过期秒数（默认 `900`）
 
+备案号展示（登录页和登录后首页底部中间）：
+- `NUXT_PUBLIC_SHOW_ICP_FILING`：是否显示备案号（`true`/`false`）
+- `NUXT_PUBLIC_ICP_FILING_TEXT`：备案号文本（例如：`粤ICP备xxxxxxx号-1`）
+- `NUXT_PUBLIC_ICP_FILING_LINK`：备案链接（默认 `https://beian.miit.gov.cn/`）
+
 ### 3. 安装依赖
 
 ```bash

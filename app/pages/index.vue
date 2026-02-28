@@ -24,7 +24,7 @@ function getRoleLabel(role?: string) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-background">
+  <div class="min-h-screen bg-background flex flex-col">
     <header class="bg-white shadow-sm">
       <div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
         <h1 class="text-xl font-bold text-foreground">打卡契约</h1>
@@ -40,7 +40,7 @@ function getRoleLabel(role?: string) {
       </div>
     </header>
 
-    <main class="max-w-4xl mx-auto px-4 py-8">
+    <main class="max-w-4xl w-full mx-auto px-4 py-8 flex-1">
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-lg font-semibold text-foreground">我的小组</h2>
         <div class="flex gap-3">
@@ -98,5 +98,6 @@ function getRoleLabel(role?: string) {
         </NuxtLink>
       </div>
     </main>
+    <LayoutIcpFilingFooter />
   </div>
 </template>
